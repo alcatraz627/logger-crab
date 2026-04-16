@@ -1,0 +1,23 @@
+[package]
+name = "notify"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pluggable notification sinks (Slack, SES) — extractable as a standalone crate"
+
+[lib]
+name = "notify"
+path = "src/lib.rs"
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true

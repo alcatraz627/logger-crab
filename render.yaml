@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: logger-crab
+    env: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PORT
+        value: "8080"
+      - key: DATABASE_URL
+        value: sqlite:///var/data/logs.db
+      - key: HOT_STORE
+        value: sqlite
+      - key: COLD_STORE
+        value: s3
+      - key: INGEST_TOKEN
+        sync: false
+      - key: DASHBOARD_TOKEN
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_REGION
+        value: us-east-1
+      - key: S3_LOGS_BUCKET
+        value: versable-logs
+      - key: SLACK_WEBHOOK_URL
+        sync: false
+      - key: ENABLE_ALERTS
+        value: "false"
+      - key: RUST_LOG
+        value: info
+    disk:
+      name: logger-crab-data
+      mountPath: /var/data
+      sizeGB: 1
+    healthCheckPath: /health
+    autoDeploy: true

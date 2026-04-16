@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = ["crates/log-server", "crates/notify"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+authors = ["Versable <eng@versable.io>"]
+license = "MIT"
+repository = "https://github.com/versable/logger-crab"
+
+[workspace.dependencies]
+# Async runtime + web
+tokio = { version = "1.40", features = ["full"] }
+axum = { version = "0.7", features = ["macros", "http2"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "compression-gzip", "timeout", "cors"] }
+hyper = { version = "1.5", features = ["full"] }
+
+# Database
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid", "macros", "migrate"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["raw_value"] }
+
+# HTML templating + htmx
+maud = { version = "0.26", features = ["axum"] }
+
+# AWS
+aws-config = { version = "1.5", features = ["behavior-version-latest"] }
+aws-sdk-s3 = "1.50"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Errors + tracing
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Misc
+async-trait = "0.1"
+uuid = { version = "1.11", features = ["v4", "serde"] }
+futures = "0.3"
+bytes = "1.8"
+flate2 = "1.0"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

@@ -1,0 +1,30 @@
+# Rust
+target/
+**/*.rs.bk
+*.pdb
+Cargo.lock.bak
+
+# sqlx offline cache (checked in only when intentionally pre-generated)
+# .sqlx/
+
+# Local dev
+.env
+.env.local
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+/var/
+
+# IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+# Claude scratch
+_*.claude.md
+claude/_*.claude.md
+**/.playwright-mcp/
+.claude/skills/shared/locks/
