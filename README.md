@@ -32,53 +32,113 @@ Starter $7/mo, SQLite on disk, no managed DB).
 
 ## Architecture
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│ EMITTERS (existing Versable services)                              │
-│   Next.js (Vercel) │ FastAPI (Render) │ Credit Worker │ Crons      │
-│                                                                    │
-│   Each imports the matching shipper:                               │
-│     @versable/logger-crab     (Node + Browser)                     │
-│     logger_crab (PyPI / git)  (Python)                             │
-│   Shippers auto-grab request_id from runtime context               │
-└────────────────────────────────────────────────────────────────────┘
-                            │
-                            │  POST /ingest  (batched, fire-and-forget)
-                            │  Authorization: Bearer $INGEST_TOKEN
-                            ▼
-┌────────────────────────────────────────────────────────────────────┐
-│ logger-crab  (Render Starter, $7/mo, env=shared-infra)             │
-│                                                                    │
-│   axum routes:  POST /ingest │ GET /logs │ GET /dashboard          │
-│   tokio tasks:  hourly S3 rotation │ daily hot-tier purge          │
-│   notify crate: Slack webhook (V1.5: error-rate alerts)            │
-└────────────────────────────────────────────────────────────────────┘
-                │                              │
-                ▼ hot (24–48h)                 ▼ cold (forever)
-     ┌────────────────────┐          ┌──────────────────────┐
-     │ SQLite (1 GB disk) │          │ S3 NDJSON gzip       │
-     │ FTS5 + JSON1       │          │ s3://versable-logs/  │
-     │ WAL mode           │          │ {env}/{service}/     │
-     └────────────────────┘          │ {YYYY}/{MM}/{DD}/    │
-                                     │ {HH}.ndjson.gz       │
-                                     └──────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Emitters["🛰  EMITTERS · existing Versable services"]
+        direction LR
+        NX[Next.js<br/>Vercel]
+        FA[FastAPI<br/>Render]
+        CW[Credit Worker<br/>Render]
+        CR[Cron Jobs]
+        RD[(Redis)]
+        MG[(Mongo)]
+        PG[(Postgres)]
+    end
+
+    Emitters -->|"POST /ingest · batched · Bearer INGEST_TOKEN"| LC
+
+    subgraph LC["🦀  logger-crab · Rust · axum · Render Starter"]
+        direction LR
+        RT["routes<br/>/ingest · /logs · /dashboard<br/>/docs · /openapi.yaml · /health"]
+        TK["tokio workers<br/>hot→cold rotation<br/>(V1.5) error-rate alerts"]
+        NF["notify crate<br/>Slack · SES"]
+    end
+
+    LC -->|"hot tier · 24–48h"| SQL[("SQLite<br/>FTS5 + JSON1 · WAL<br/>1 GB Render disk")]
+    LC -->|"cold tier · ∞"| S3[("S3 NDJSON gzip<br/>s3://versable-logs/<br/>{env}/{service}/{YYYY}/{MM}/{DD}/{HH}.ndjson.gz")]
+
+    classDef emitter fill:#1f6feb22,stroke:#1f6feb,color:#c9d1d9
+    classDef core fill:#f78166_22,stroke:#f78166,color:#c9d1d9
+    classDef store fill:#2ea04322,stroke:#2ea043,color:#c9d1d9
+    class NX,FA,CW,CR emitter
+    class RT,TK,NF core
+    class SQL,S3 store
 ```
 
-### The correlation backbone
+<sub>Terminal-rendered version: [`docs/architecture-terminal.txt`](docs/architecture-terminal.txt)</sub>
 
-```
- UI middleware  ──X-Request-ID──▶  FastAPI  ──payload.request_id──▶  Redis
-        │                            │                                 │
-        ▼                            ▼                                 ▼
-   AsyncLocalStorage            ContextVar                  Worker reads from
-   (auto-bound to               (auto-bound to              payload, calls
-   every log call)              every log call)             withRequestId(...)
-        │                            │                                 │
-        └────────── all three set Sentry tag: request_id = id ────────┘
+### The correlation backbone — request_id threading
+
+Set **once** at each runtime edge. Every `log.info(...)` call deeper in the
+stack auto-grabs it. No threading by hand, no parameter drilling.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Browser
+    participant UI as Next.js middleware
+    participant API as FastAPI
+    participant Redis
+    participant Worker as Credit Worker
+    participant Sentry
+    participant LC as logger-crab
+
+    Browser->>UI: HTTP request (optional X-Request-ID)
+    Note over UI: withRequestId(rid, …)<br/>AsyncLocalStorage bound
+    UI->>API: proxy → X-Request-ID: rid
+    Note over API: REQUEST_ID.set(rid)<br/>ContextVar bound
+    UI-->>Sentry: tag request_id=rid
+    API-->>Sentry: tag request_id=rid
+    API->>Redis: RPUSH queue {payload, request_id: rid}
+    Worker->>Redis: BRPOP queue
+    Note over Worker: withRequestId(payload.request_id, …)
+    Worker-->>Sentry: tag request_id=rid
+
+    par Every log call auto-attaches rid
+        UI->>LC: POST /ingest (events[].request_id = rid)
+        API->>LC: POST /ingest (events[].request_id = rid)
+        Worker->>LC: POST /ingest (events[].request_id = rid)
+    end
+
+    Note over LC: one query retrieves every log<br/>for one user action, across all hops
 ```
 
-`request_id` is set **once** at each runtime edge. Every `log.info(...)` call
-deeper in the stack auto-grabs it. No threading by hand, no parameter drilling.
+### Ingest → query lifecycle
+
+```mermaid
+flowchart LR
+    A[Shipper call<br/>log.info⋅warn⋅error] -->|runtime context| B[Auto-attach<br/>request_id · service · env]
+    B --> C[Batch buffer<br/>N events or 500ms]
+    C -->|"POST /ingest<br/>Bearer INGEST_TOKEN"| D{logger-crab<br/>ingest handler}
+    D -->|validate + normalize| E[(SQLite HotStore<br/>insert batch)]
+    E --> F[Available in /logs<br/>and /dashboard]
+    E -.->|age > HOT_RETENTION_HOURS| G[Rotation worker<br/>tokio interval]
+    G --> H[(S3 NDJSON gzip<br/>partitioned by env/service/date)]
+    F -->|filter + FTS| I[Dashboard · maud SSR]
+    F -->|JSON| J[curl /logs?request_id=…]
+
+    classDef shipper fill:#8957e522,stroke:#8957e5,color:#c9d1d9
+    classDef core fill:#f78166_22,stroke:#f78166,color:#c9d1d9
+    classDef store fill:#2ea04322,stroke:#2ea043,color:#c9d1d9
+    class A,B,C shipper
+    class D,G core
+    class E,H store
+```
+
+### Hot/cold tier state machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> Ingested
+    Ingested --> Hot: committed to SQLite
+    Hot --> Queryable: FTS index built<br/>/logs + /dashboard see it
+    Queryable --> Rotating: age > HOT_RETENTION_HOURS
+    Rotating --> Cold: NDJSON.gz written to S3<br/>row deleted from SQLite
+    Cold --> [*]: archived (forever)
+
+    Queryable --> Purged: manual DELETE<br/>(compliance only)
+    Purged --> [*]
+```
 
 ---
 

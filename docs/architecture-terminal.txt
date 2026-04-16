@@ -1,0 +1,24 @@
+╔════════════════════════════════════════════════════════════════════╗
+║  EMITTERS                                                          ║
+║  ╭──────────────────╮  ╭──────────╮                                ║
+║  │ Next.js (Vercel) │  │ Redis    │                                ║
+║  │ FastAPI (Render) │  │ Mongo    │                                ║
+║  │ Credit Worker    │  │ Postgres │                                ║
+║  │ Cron Jobs        │  ╰──────────╯                                ║
+║  ╰──────────────────╯                                              ║
+╚════════════════════════════════════════════════════════════════════╝
+
+                      │  POST /ingest (batched)
+                      │  Authorization: Bearer $INGEST_TOKEN
+                      ▼
+╔════════════════════════════════════════════════════════════════════╗
+║  logger-crab (Rust · axum · Render Starter)                        ║
+║  routes: /ingest /logs /dashboard /docs /openapi.yaml              ║
+║  tokio: hot→cold rotation · notify crate for alerts                ║
+╚════════════════════════════════════════════════════════════════════╝
+
+         │                                 │
+         ▼ hot 24–48h                      ▼ cold ∞
+┌──────────────────────────────┐     ┌──────────────────┐
+│  SQLite (FTS5 + JSON1, WAL)  │     │  S3 NDJSON gzip  │
+└──────────────────────────────┘     └──────────────────┘
