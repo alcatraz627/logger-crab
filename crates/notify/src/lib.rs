@@ -3,8 +3,8 @@
 
 use async_trait::async_trait;
 
-pub mod slack;
 pub mod ses;
+pub mod slack;
 
 #[derive(Debug, thiserror::Error)]
 pub enum NotifyError {

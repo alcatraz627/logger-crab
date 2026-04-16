@@ -28,10 +28,7 @@ impl SqliteHotStore {
             .synchronous(SqliteSynchronous::Normal)
             .busy_timeout(Duration::from_secs(5));
 
-        let pool = SqlitePoolOptions::new()
-            .max_connections(8)
-            .connect_with(opts)
-            .await?;
+        let pool = SqlitePoolOptions::new().max_connections(8).connect_with(opts).await?;
 
         sqlx::migrate!("./migrations")
             .run(&pool)
@@ -152,10 +149,7 @@ impl HotStore for SqliteHotStore {
         Ok(QueryPage { events, next_cursor: None })
     }
 
-    async fn drain_older_than(
-        &self,
-        before: DateTime<Utc>,
-    ) -> Result<EventStream, StorageError> {
+    async fn drain_older_than(&self, before: DateTime<Utc>) -> Result<EventStream, StorageError> {
         let before_s = before.to_rfc3339();
         let mut tx = self.pool.begin().await?;
 
@@ -168,15 +162,11 @@ impl HotStore for SqliteHotStore {
         .fetch_all(&mut *tx)
         .await?;
 
-        sqlx::query("DELETE FROM events WHERE ts < ?")
-            .bind(&before_s)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query("DELETE FROM events WHERE ts < ?").bind(&before_s).execute(&mut *tx).await?;
 
         tx.commit().await?;
 
-        let events: Vec<LogEvent> =
-            rows.iter().filter_map(|r| row_to_event(r).ok()).collect();
+        let events: Vec<LogEvent> = rows.iter().filter_map(|r| row_to_event(r).ok()).collect();
         Ok(Box::new(stream::iter(events)))
     }
 
@@ -186,7 +176,8 @@ impl HotStore for SqliteHotStore {
             .await?;
         let rows: i64 = row.try_get("n").unwrap_or(0);
         let oldest: Option<String> = row.try_get("oldest").ok().flatten();
-        let oldest_ts = oldest.and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+        let oldest_ts = oldest
+            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
             .map(|dt| dt.with_timezone(&Utc));
         Ok(HotHealth { ok: true, rows: rows as u64, oldest_ts })
     }

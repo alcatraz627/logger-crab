@@ -2,8 +2,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Context;
+use chrono::Utc;
 use log_server::config::Config;
 use log_server::routes;
+use log_server::routes::{mask_database_url, BootInfo};
 use log_server::seed::seed_dummy_events;
 use log_server::store::memory::MemoryHotStore;
 use log_server::store::s3::NoopColdStore;
@@ -16,7 +18,9 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .json()
         .init();
 
@@ -33,9 +37,7 @@ async fn main() -> anyhow::Result<()> {
     let hot: Arc<dyn HotStore> = match cfg.hot_store.as_str() {
         "memory" => Arc::new(MemoryHotStore::new()),
         "sqlite" => Arc::new(
-            SqliteHotStore::connect(&cfg.database_url)
-                .await
-                .context("SqliteHotStore::connect")?,
+            SqliteHotStore::connect(&cfg.database_url).await.context("SqliteHotStore::connect")?,
         ),
         other => anyhow::bail!("unknown HOT_STORE: {other}"),
     };
@@ -56,7 +58,22 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let app = routes::router(&cfg, hot, cold);
+    let boot = Arc::new(BootInfo {
+        started_at: Utc::now(),
+        git_sha: env!("BUILD_GIT_SHA"),
+        build_time_unix: env!("BUILD_TIME_UNIX").parse().unwrap_or(0),
+        hot_store: cfg.hot_store.clone(),
+        cold_store: cfg.cold_store.clone(),
+        env_name: std::env::var("APP_ENV").unwrap_or_else(|_| "dev".into()),
+        port: cfg.port,
+        s3_bucket: cfg.s3_bucket.clone(),
+        aws_region: cfg.aws_region.clone(),
+        has_ingest_token: cfg.ingest_token.is_some(),
+        has_dashboard_token: cfg.dashboard_token.is_some(),
+        database_url_masked: mask_database_url(&cfg.database_url),
+    });
+
+    let app = routes::router(&cfg, hot, cold, boot);
     let addr: SocketAddr = ([0, 0, 0, 0], cfg.port).into();
     let listener = TcpListener::bind(addr).await.context("binding tcp listener")?;
     info!(%addr, "listening");

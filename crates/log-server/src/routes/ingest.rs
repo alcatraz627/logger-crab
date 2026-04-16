@@ -1,12 +1,12 @@
-use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
+use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{AppState, auth};
+use super::{auth, AppState};
 use crate::error::AppError;
 use crate::models::LogEvent;
 
@@ -72,9 +72,8 @@ pub async fn post_ingest(
 ) -> Result<impl IntoResponse, AppError> {
     auth::require_bearer(&headers, state.ingest_token.as_deref().map(|s| s.as_str()))?;
 
-    let resource = body.resource.unwrap_or(Resource {
-        service: None, env: None, deploy: None, system: None,
-    });
+    let resource =
+        body.resource.unwrap_or(Resource { service: None, env: None, deploy: None, system: None });
 
     let mut events = Vec::with_capacity(body.events.len());
     let mut rejected = Vec::new();

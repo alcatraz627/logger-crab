@@ -1,0 +1,244 @@
+openapi: 3.1.0
+info:
+  title: logger-crab
+  version: "0.1.0"
+  summary: Centralized log ingest + query service
+  description: |
+    `logger-crab` is a self-hosted centralized logging service.
+
+    - **Hot tier**: SQLite (WAL-mode) keeps the last 24–48h for fast queries.
+    - **Cold tier**: S3 NDJSON (`logs/YYYY/MM/DD/HH/` partitioning) for long-term archive.
+    - **Correlation**: every event carries a `request_id` that is also the unit of grouping across services.
+
+    The ingest envelope loosely follows the **OpenTelemetry Logs Data Model** — a
+    `Resource` + `Scope` + batch of `records` — but the server flattens records
+    into a single `events` table at write time.
+  contact:
+    name: logger-crab
+    url: https://github.com/alcatraz627/logger-crab
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8099
+    description: Local dev
+  - url: https://logger-crab.onrender.com
+    description: Production (Render)
+
+tags:
+  - name: ingest
+    description: Write logs into the hot store
+  - name: logs
+    description: Query logs out of the hot store
+  - name: ops
+    description: Health + liveness
+
+paths:
+  /ingest:
+    post:
+      tags: [ingest]
+      summary: Ingest a batch of log records
+      description: |
+        Accepts an OTel-flavored envelope: a single `Resource` + `Scope` with a
+        batch of records. Returns a count of accepted events.
+      security:
+        - BearerIngest: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IngestBody"
+            examples:
+              minimal:
+                summary: Minimal single-event batch
+                value:
+                  resource:
+                    service.name: versable-api
+                    service.env: prod
+                  records:
+                    - event: http.request
+                      severity_number: 9
+                      severity_text: info
+                      ts: "2026-04-17T12:00:00Z"
+                      request_id: req_abc_01
+                      message: POST /api/jobs 201
+                      attrs:
+                        method: POST
+                        status: 201
+      responses:
+        "200":
+          description: Ingest accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResponse"
+        "401":
+          description: Missing or wrong bearer token
+        "422":
+          description: Body failed validation
+
+  /logs:
+    get:
+      tags: [logs]
+      summary: Query the hot store
+      description: |
+        Returns the most recent events matching all filters (AND semantics).
+        Results are ordered newest-first. Use `cursor` for pagination.
+      security:
+        - BearerDashboard: []
+      parameters:
+        - { name: request_id, in: query, schema: { type: string } }
+        - { name: user_id,    in: query, schema: { type: string } }
+        - { name: session_id, in: query, schema: { type: string } }
+        - { name: service,    in: query, schema: { type: string } }
+        - { name: env,        in: query, schema: { type: string } }
+        - { name: event_prefix, in: query, schema: { type: string }, description: "Matches `event LIKE prefix%`" }
+        - { name: min_severity, in: query, schema: { type: integer, minimum: 1, maximum: 24 } }
+        - { name: since, in: query, schema: { type: string, format: date-time } }
+        - { name: until, in: query, schema: { type: string, format: date-time } }
+        - { name: q,      in: query, schema: { type: string }, description: "Full-text search (FTS5)" }
+        - { name: limit,  in: query, schema: { type: integer, default: 100, minimum: 1, maximum: 500 } }
+        - { name: cursor, in: query, schema: { type: string }, description: "Opaque cursor from previous page's `next_cursor`" }
+      responses:
+        "200":
+          description: Page of events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryPage"
+        "401":
+          description: Missing or wrong bearer token
+
+  /health:
+    get:
+      tags: [ops]
+      summary: Service health
+      description: |
+        Returns hot-store and cold-store health. Used by Render / uptime probes.
+      responses:
+        "200":
+          description: Health snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+components:
+  securitySchemes:
+    BearerIngest:
+      type: http
+      scheme: bearer
+      description: "Uses the `INGEST_TOKEN` env var. Dev: unset → unauthenticated."
+    BearerDashboard:
+      type: http
+      scheme: bearer
+      description: "Uses the `DASHBOARD_TOKEN` env var. Dev: unset → unauthenticated."
+
+  schemas:
+    Resource:
+      type: object
+      description: Service identity + deployment environment
+      properties:
+        service.name: { type: string, example: versable-api }
+        service.env:  { type: string, example: prod }
+        service.version: { type: string, example: "1.4.2" }
+      additionalProperties: true
+
+    Scope:
+      type: object
+      description: Optional instrumentation scope (library name/version)
+      properties:
+        name:    { type: string }
+        version: { type: string }
+
+    RawEvent:
+      type: object
+      required: [event, severity_number, ts, request_id]
+      properties:
+        event:
+          type: string
+          description: Dot-namespaced event name (e.g., `pipeline.start`)
+          example: http.request
+        severity_number:
+          type: integer
+          minimum: 1
+          maximum: 24
+          description: OTel severity (1=TRACE .. 21=FATAL)
+        severity_text:
+          type: string
+          enum: [trace, debug, info, warn, error, fatal]
+        ts:
+          type: string
+          format: date-time
+        request_id: { type: string, example: req_alice_01 }
+        user_id:    { type: string }
+        session_id: { type: string }
+        client_id:  { type: string }
+        message:    { type: string }
+        attrs:
+          type: object
+          additionalProperties: true
+          description: Free-form structured payload
+
+    IngestBody:
+      type: object
+      required: [resource, records]
+      properties:
+        resource: { $ref: "#/components/schemas/Resource" }
+        scope:    { $ref: "#/components/schemas/Scope" }
+        records:
+          type: array
+          items: { $ref: "#/components/schemas/RawEvent" }
+          minItems: 1
+
+    IngestResponse:
+      type: object
+      required: [accepted]
+      properties:
+        accepted: { type: integer, example: 1 }
+
+    LogEvent:
+      type: object
+      required: [request_id, event, severity_number, severity_text, ts, payload]
+      properties:
+        request_id: { type: string }
+        event: { type: string }
+        severity_number: { type: integer }
+        severity_text: { type: string }
+        ts: { type: string, format: date-time }
+        message: { type: string, nullable: true }
+        service: { type: string, nullable: true }
+        env: { type: string, nullable: true }
+        user_id: { type: string, nullable: true }
+        session_id: { type: string, nullable: true }
+        client_id: { type: string, nullable: true }
+        payload:
+          type: object
+          additionalProperties: true
+
+    QueryPage:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/LogEvent" }
+        next_cursor:
+          type: string
+          nullable: true
+          description: Pass back as `cursor` to fetch the next page
+
+    HealthResponse:
+      type: object
+      required: [ok, hot_ok, cold_ok]
+      properties:
+        ok: { type: boolean }
+        hot_ok: { type: boolean }
+        cold_ok: { type: boolean }
+        hot:
+          type: object
+          nullable: true
+          properties:
+            rows: { type: integer }
+            oldest_ts: { type: string, format: date-time, nullable: true }
