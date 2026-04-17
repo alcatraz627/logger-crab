@@ -3,6 +3,21 @@
 Prepend new sessions at the top. Each entry captures insights reusable by
 future sessions (not a changelog — the commit log + WAL cover that).
 
+## session: rebrand + dashboard polish [refac-nav-a0] — 2026-04-17
+
+**Purpose:** Rebrand dashboard to "Versable logger-crab" with Versable favicon, fix git=unknown footer, replace native selects with rich pill/button-group filters, and lift footer truncation.
+
+**Insights:**
+
+1. **Render injects `RENDER_GIT_COMMIT` as a build ARG — but only if you declare it.** Docker build contexts strip `.git`, so `git rev-parse` in `build.rs` always returns "unknown" on Render. Fix needs both pieces: (a) `ARG RENDER_GIT_COMMIT="" / ENV RENDER_GIT_COMMIT=$RENDER_GIT_COMMIT` in the builder stage of the Dockerfile, and (b) `build.rs` reads the env var first, falls back to git command. Without (a), step (b) sees nothing — Render only auto-injects build ARGs that are explicitly declared in the Dockerfile.
+2. **`PreEscaped` is mandatory for inline SVG in maud.** The `html!` macro escapes `<` and `>` by default, so an icon helper must wrap its raw SVG string in `PreEscaped(format!(r#"<svg ...>...</svg>"#))`. Pattern: write a single `svg_icon(path_d)` helper that builds the wrapper attrs and PreEscapes — then each individual icon function (`icon_check`, `icon_x`, etc.) is a one-liner returning `svg_icon(r#"<polyline ...>"#)`.
+3. **Footer truncation is anti-feature when value can wrap.** The original `.ft-v { max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }` truncated `db = sqlite:///var/data/logs.db` to `sqlite:///var/d…`. Fix: drop the truncation rules, switch to `word-break: break-all`, and let the value wrap naturally. The `title` attribute with full value becomes redundant once the actual value is visible.
+4. **Sticky-bottom footer pattern that actually works:** `body { min-height: 100vh; display: flex; flex-direction: column }` + `main { flex: 1 0 auto }` + `footer { flex-shrink: 0; margin-top: auto }`. Without `flex-shrink: 0`, the footer collapses on short pages; without `flex: 1 0 auto` on main, the footer floats up against the table.
+5. **Custom rich select pattern (no JS).** Instead of a native `<select>`, render a row of `<a>` tags with `href` pointing to a URL with the param toggled on/removed. Active state computed server-side from `q.level`. Each option gets `aria-checked` and a `role="radiogroup"` parent for screen readers. URL stays the source of truth — no JS state to reconcile (same pattern as `filter_url_override` / `filter_url_remove` chips).
+6. **Chrome MCP browser locks on `~/.cache/chrome-devtools-mcp/chrome-profile`.** When a previous session left the persistent Chrome profile in use, every `new_page`/`list_pages` call returns "browser is already running" — even with `isolatedContext`. Fallback: skip the screenshot, fetch HTML via `curl`, grep for the new selectors and key bits (link href, badge text). Faster anyway when you only need to confirm structure, not pixels.
+
+---
+
 ## session: dashboard 3-iter overhaul + CI + deploy-prep [dash-iter-9c] — 2026-04-17
 
 **Purpose:** Screenshot the dashboard, iterate 3× on visual/UX/a11y, bootstrap CI, prep Render deploy artifacts.

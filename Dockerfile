@@ -6,6 +6,11 @@
 ARG RUST_VERSION=1.83
 FROM rust:${RUST_VERSION}-slim-bookworm AS builder
 
+# Render injects RENDER_GIT_COMMIT as a build ARG; pass it through to build.rs
+# so the dashboard footer shows the real commit instead of "unknown".
+ARG RENDER_GIT_COMMIT=""
+ENV RENDER_GIT_COMMIT=$RENDER_GIT_COMMIT
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        pkg-config libssl-dev ca-certificates \

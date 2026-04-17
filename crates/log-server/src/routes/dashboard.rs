@@ -6,7 +6,14 @@ use serde::Deserialize;
 
 use super::{AppState, BootInfo};
 use crate::error::AppError;
-use crate::models::{HotHealth, LogEvent, QueryParams};
+use crate::models::{ColdHealth, HotHealth, LogEvent, QueryParams};
+
+const PUBLIC_URL: &str = "https://logger-crab.onrender.com";
+const GITHUB_URL: &str = "https://github.com/versable/logger-crab";
+const BRAND_NAME: &str = "Versable logger-crab";
+
+const LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error", "fatal"];
+const PAGE_SIZES: &[u32] = &[50, 100, 250, 500];
 
 #[derive(Deserialize, Default)]
 pub struct DashboardQuery {
@@ -41,8 +48,15 @@ pub async fn get_dashboard(
     };
     let page = state.hot.query(&params).await?;
     let health = state.hot.health().await.ok();
-    let markup =
-        render(&q, &page.events, page.next_cursor.as_deref(), health.as_ref(), &state.boot);
+    let cold_health = state.cold.health().await.ok();
+    let markup = render(
+        &q,
+        &page.events,
+        page.next_cursor.as_deref(),
+        health.as_ref(),
+        cold_health.as_ref(),
+        &state.boot,
+    );
     Ok(Html(markup.into_string()))
 }
 
@@ -144,6 +158,7 @@ fn render(
     events: &[LogEvent],
     next_cursor: Option<&str>,
     health: Option<&HotHealth>,
+    cold: Option<&ColdHealth>,
     boot: &BootInfo,
 ) -> Markup {
     let total = events.len();
@@ -157,9 +172,8 @@ fn render(
             head {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
-                title { "logger-crab · dashboard" }
-                link rel="icon" type="image/svg+xml"
-                    href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='14' font-size='14'%3E%F0%9F%A6%80%3C/text%3E%3C/svg%3E";
+                title { (BRAND_NAME) " · dashboard" }
+                link rel="icon" type="image/svg+xml" href="/favicon.svg";
                 link rel="preconnect" href="https://fonts.googleapis.com";
                 link rel="preconnect" href="https://fonts.gstatic.com" crossorigin;
                 link rel="stylesheet"
@@ -168,11 +182,24 @@ fn render(
             }
             body {
                 nav.lc-nav {
-                    h1 { "🦀 logger-crab" }
-                    a.active href="/" { "dashboard" }
-                    a href="/api" { "API" }
-                    a href="/docs" { "docs" }
-                    a href="/health" { "health" }
+                    a.brand href=(PUBLIC_URL) title="open public URL" {
+                        img.brand-logo src="/assets/versable-logo.svg" alt="Versable" width="22" height="22";
+                        span.brand-name { (BRAND_NAME) }
+                    }
+                    div.nav-links {
+                        a.nav-link href="/api" title="OpenAPI / Swagger UI" {
+                            (icon_code()) span { "/api" }
+                        }
+                        a.nav-link href="/docs" title="docs" {
+                            (icon_book()) span { "/docs" }
+                        }
+                        a.nav-link href="/health" title="health endpoint" {
+                            (icon_pulse()) span { "/health" }
+                        }
+                        a.nav-link href=(GITHUB_URL) target="_blank" rel="noopener" title="source on GitHub" {
+                            (icon_github()) span { "/github" }
+                        }
+                    }
                     div.health-chip {
                         @if health_ok {
                             span.dot.ok { } "hot ok"
@@ -185,51 +212,44 @@ fn render(
 
                 form.filters method="get" action="/" {
                     div.filter-group {
-                        label { "request_id" }
+                        label { (icon_hash()) "request_id" }
                         input type="text" name="request_id"
                             value=[q.request_id.as_deref()] placeholder="req_abc_01";
                     }
                     div.filter-group {
-                        label { "service" }
+                        label { (icon_box()) "service" }
                         input type="text" name="service"
                             value=[q.service.as_deref()] placeholder="versable-api";
                     }
                     div.filter-group {
-                        label { "env" }
+                        label { (icon_globe()) "env" }
                         input type="text" name="env"
                             value=[q.env.as_deref()] placeholder="prod";
                     }
                     div.filter-group {
-                        label { "event prefix" }
+                        label { (icon_branch()) "event prefix" }
                         input type="text" name="event_prefix"
                             value=[q.event_prefix.as_deref()] placeholder="pipeline.";
                     }
-                    div.filter-group {
-                        label { "level" }
-                        select name="level" {
-                            option value="" { "any" }
-                            @for lvl in ["trace", "debug", "info", "warn", "error", "fatal"] {
-                                option value=(lvl) selected[q.level.as_deref() == Some(lvl)] { (lvl) }
-                            }
-                        }
-                    }
                     div.filter-group.grow {
-                        label { "full-text search" }
+                        label { (icon_search()) "full-text search" }
                         input type="text" name="q"
                             value=[q.q.as_deref()] placeholder="message or payload…";
                     }
                     div.filter-group.actions {
                         label { "\u{00a0}" }
                         div.btn-row {
-                            select name="limit" {
-                                @for n in [50u32, 100, 250, 500] {
-                                    option value=(n) selected[q.limit.unwrap_or(100) == n] { (n) "/page" }
-                                }
+                            button.btn-apply type="submit" title="apply filters (Enter)" {
+                                (icon_check()) span { "Apply" }
                             }
-                            button type="submit" { "apply" }
-                            a.reset href="/" { "reset" }
+                            a.btn-reset href="/" title="clear all filters" {
+                                (icon_x()) span { "Reset" }
+                            }
                         }
                     }
+
+                    (level_pill_filter(q))
+                    (page_size_selector(q))
                 }
 
                 div.toolbar {
@@ -243,10 +263,23 @@ fn render(
                     (render_active_filters(q))
                     div.grow { }
                     span.hint title="Press / to focus search" { "press " kbd { "/" } " to search" }
-                    @if let Some(cursor) = next_cursor {
-                        a.pager href=(build_next_url(q, cursor)) { "older →" }
-                    } @else {
-                        span.pager.disabled { "no older" }
+                    div.pager-group {
+                        @if q.cursor.is_some() {
+                            a.pager.pager-newer href=(filter_url_remove(q, "cursor"))
+                                title="jump to newest events" {
+                                "← newest"
+                            }
+                        } @else {
+                            span.pager.pager-newer.disabled title="already at newest" { "← newest" }
+                        }
+                        @if let Some(cursor) = next_cursor {
+                            a.pager.pager-older href=(build_next_url(q, cursor))
+                                title="page back through older events" {
+                                "older →"
+                            }
+                        } @else {
+                            span.pager.pager-older.disabled title="no older events" { "older →" }
+                        }
                     }
                 }
 
@@ -365,7 +398,7 @@ fn render(
                     }
                 }
 
-                (render_footer(boot, health))
+                (render_footer(boot, health, cold))
 
                 script { (PreEscaped(JS)) }
             }
@@ -487,14 +520,55 @@ fn render_active_filters(q: &DashboardQuery) -> Markup {
     }
 }
 
-fn render_footer(boot: &BootInfo, health: Option<&HotHealth>) -> Markup {
+fn truncate(s: &str, n: usize) -> String {
+    if s.len() <= n {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..n.saturating_sub(1)])
+    }
+}
+
+fn render_footer(
+    boot: &BootInfo,
+    health: Option<&HotHealth>,
+    cold: Option<&ColdHealth>,
+) -> Markup {
+    let git_sha_clean = boot.git_sha.trim_end_matches("-dirty");
+    let git_is_dirty = boot.git_sha.ends_with("-dirty");
+    let git_known = !git_sha_clean.is_empty() && git_sha_clean != "unknown";
+    let commit_url = if git_known {
+        format!("{}/commit/{}", GITHUB_URL, git_sha_clean)
+    } else {
+        String::new()
+    };
+
     html! {
         footer.lc-footer {
             div.ft-col {
                 div.ft-title { "build" }
-                div.ft-row { span.ft-k { "git" } span.ft-v.mono { (boot.git_sha) } }
-                div.ft-row { span.ft-k { "built" } span.ft-v { (fmt_build_time(boot.build_time_unix)) } }
+                div.ft-row {
+                    span.ft-k { "git" }
+                    @if git_known {
+                        a.ft-v.mono.ft-link href=(commit_url) target="_blank" rel="noopener"
+                            title=(format!("view commit {git_sha_clean} on GitHub")) {
+                            (git_sha_clean)
+                            @if git_is_dirty { span.ft-dirty title="working tree was dirty at build" { "·dirty" } }
+                        }
+                    } @else {
+                        span.ft-v.mono.warn title="set RENDER_GIT_COMMIT in builder env" { "unknown" }
+                    }
+                }
+                div.ft-row {
+                    span.ft-k { "built" }
+                    span.ft-v title=(fmt_build_time(boot.build_time_unix)) {
+                        (fmt_build_age(boot.build_time_unix))
+                    }
+                }
                 div.ft-row { span.ft-k { "uptime" } span.ft-v { (fmt_uptime(boot.uptime_seconds())) } }
+                div.ft-row {
+                    span.ft-k { "started" }
+                    span.ft-v { (boot.started_at.format("%Y-%m-%d %H:%M UTC").to_string()) }
+                }
             }
             div.ft-col {
                 div.ft-title { "hosting" }
@@ -505,41 +579,31 @@ fn render_footer(boot: &BootInfo, health: Option<&HotHealth>) -> Markup {
                     }
                 }
                 div.ft-row { span.ft-k { "port" } span.ft-v.mono { (boot.port) } }
-                div.ft-row {
-                    span.ft-k { "started" }
-                    span.ft-v { (boot.started_at.format("%Y-%m-%d %H:%M UTC").to_string()) }
-                }
-            }
-            div.ft-col {
-                div.ft-title { "config" }
-                div.ft-row { span.ft-k { "hot" } span.ft-v.mono { (boot.hot_store) } }
-                div.ft-row { span.ft-k { "cold" } span.ft-v.mono { (boot.cold_store) } }
+                div.ft-row { span.ft-k { "region" } span.ft-v.mono { (boot.aws_region) } }
                 div.ft-row {
                     span.ft-k { "ingest auth" }
                     @if boot.has_ingest_token {
-                        span.ft-v.ok { "set" }
+                        span.ft-v.ok { "● set" }
                     } @else {
-                        span.ft-v.warn { "unset" }
+                        span.ft-v.warn { "○ unset" }
                     }
                 }
                 div.ft-row {
                     span.ft-k { "dash auth" }
                     @if boot.has_dashboard_token {
-                        span.ft-v.ok { "set" }
+                        span.ft-v.ok { "● set" }
                     } @else {
-                        span.ft-v.warn { "unset" }
+                        span.ft-v.warn { "○ unset" }
                     }
                 }
-                @if let Some(bucket) = &boot.s3_bucket {
-                    div.ft-row { span.ft-k { "bucket" } span.ft-v.mono { (bucket) } }
-                }
-                div.ft-row { span.ft-k { "region" } span.ft-v.mono { (boot.aws_region) } }
             }
             div.ft-col {
-                div.ft-title { "health" }
+                div.ft-title { "hot · sqlite" }
+                div.ft-row { span.ft-k { "store" } span.ft-v.mono { (boot.hot_store) } }
+                div.ft-row { span.ft-k { "db" } span.ft-v.mono { (boot.database_url_masked) } }
                 @if let Some(h) = health {
                     div.ft-row {
-                        span.ft-k { "hot" }
+                        span.ft-k { "status" }
                         @if h.ok { span.ft-v.ok { "● online" } }
                         @else { span.ft-v.err { "● offline" } }
                     }
@@ -547,16 +611,137 @@ fn render_footer(boot: &BootInfo, health: Option<&HotHealth>) -> Markup {
                     @if let Some(ts) = h.oldest_ts {
                         div.ft-row {
                             span.ft-k { "oldest" }
-                            span.ft-v { (fmt_relative(ts)) }
+                            span.ft-v title=(ts.format("%Y-%m-%d %H:%M:%S UTC").to_string()) {
+                                (fmt_relative(ts))
+                            }
                         }
                     }
                 } @else {
-                    div.ft-row { span.ft-k { "hot" } span.ft-v.err { "● offline" } }
+                    div.ft-row { span.ft-k { "status" } span.ft-v.err { "● offline" } }
                 }
-                div.ft-row {
-                    span.ft-k { "db" }
-                    span.ft-v.mono title=(boot.database_url_masked) {
-                        (truncate(&boot.database_url_masked, 24))
+            }
+            div.ft-col {
+                div.ft-title { "cold · " (boot.cold_store) }
+                @if let Some(c) = cold {
+                    div.ft-row {
+                        span.ft-k { "status" }
+                        @if c.ok { span.ft-v.ok { "● online" } }
+                        @else { span.ft-v.warn { "○ unconfigured" } }
+                    }
+                    @if let Some(ts) = c.last_rotation {
+                        div.ft-row {
+                            span.ft-k { "last rotation" }
+                            span.ft-v title=(ts.format("%Y-%m-%d %H:%M:%S UTC").to_string()) {
+                                (fmt_relative(ts))
+                            }
+                        }
+                    } @else {
+                        div.ft-row { span.ft-k { "last rotation" } span.ft-v.dim { "—" } }
+                    }
+                } @else {
+                    div.ft-row { span.ft-k { "status" } span.ft-v.warn { "○ unavailable" } }
+                }
+                @if let Some(bucket) = &boot.s3_bucket {
+                    div.ft-row { span.ft-k { "bucket" } span.ft-v.mono { (bucket) } }
+                } @else {
+                    div.ft-row { span.ft-k { "bucket" } span.ft-v.dim { "—" } }
+                }
+            }
+        }
+    }
+}
+
+fn fmt_build_age(unix: u64) -> String {
+    if unix == 0 {
+        return "unknown".into();
+    }
+    let delta = (Utc::now().timestamp() - unix as i64).max(0);
+    let m = delta / 60;
+    if m < 60 {
+        return format!("{m}m ago");
+    }
+    let h = m / 60;
+    if h < 48 {
+        return format!("{h}h ago");
+    }
+    let d = h / 24;
+    format!("{d}d ago")
+}
+
+// ── Inline icon helpers (Lucide-style 16px strokes) ──────────────────────────
+
+fn svg_icon(path_d: &str) -> Markup {
+    let svg = format!(
+        r#"<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{path_d}</svg>"#
+    );
+    PreEscaped(svg)
+}
+
+fn icon_code() -> Markup {
+    svg_icon(r#"<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>"#)
+}
+fn icon_book() -> Markup {
+    svg_icon(r#"<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>"#)
+}
+fn icon_pulse() -> Markup {
+    svg_icon(r#"<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>"#)
+}
+fn icon_github() -> Markup {
+    svg_icon(r#"<path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/>"#)
+}
+fn icon_hash() -> Markup {
+    svg_icon(r#"<line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/>"#)
+}
+fn icon_box() -> Markup {
+    svg_icon(r#"<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>"#)
+}
+fn icon_globe() -> Markup {
+    svg_icon(r#"<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>"#)
+}
+fn icon_branch() -> Markup {
+    svg_icon(r#"<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>"#)
+}
+fn icon_search() -> Markup {
+    svg_icon(r#"<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>"#)
+}
+fn icon_check() -> Markup {
+    svg_icon(r#"<polyline points="20 6 9 17 4 12"/>"#)
+}
+fn icon_x() -> Markup {
+    svg_icon(r#"<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>"#)
+}
+
+// ── Custom rich select replacements ──────────────────────────────────────────
+
+/// Row of clickable level chips (replaces native `<select name="level">`).
+/// Each chip uses the same `lvl-*` color tokens as the table cells, so the
+/// active filter visually matches the rows it filters.
+fn level_pill_filter(q: &DashboardQuery) -> Markup {
+    let active = q.level.as_deref().unwrap_or("").to_ascii_lowercase();
+    html! {
+        div.filter-group.full {
+            label { "min level" }
+            div.lvl-pill-row role="radiogroup" aria-label="filter by minimum severity" {
+                a.lvl-pill-opt.lvl-any
+                    aria-checked=(if active.is_empty() { "true" } else { "false" })
+                    href=(filter_url_remove(q, "level")) {
+                    "any"
+                }
+                @for lv in LEVELS {
+                    @let is_active = active == *lv;
+                    a class=(format!(
+                        "lvl-pill-opt lvl-pill {} {}",
+                        match *lv {
+                            "trace" => "lvl-trace", "debug" => "lvl-debug",
+                            "info" => "lvl-info", "warn" => "lvl-warn",
+                            "error" => "lvl-error", _ => "lvl-fatal",
+                        },
+                        if is_active { "is-active" } else { "" },
+                    ))
+                        aria-checked=(if is_active { "true" } else { "false" })
+                        href=(filter_url_override(q, "level", lv))
+                        title=(format!("min severity ≥ {lv}")) {
+                        (lv.to_ascii_uppercase())
                     }
                 }
             }
@@ -564,10 +749,32 @@ fn render_footer(boot: &BootInfo, health: Option<&HotHealth>) -> Markup {
     }
 }
 
-fn truncate(s: &str, n: usize) -> String {
-    if s.len() <= n {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..n.saturating_sub(1)])
+/// Button-group of page sizes (replaces native `<select name="limit">`).
+fn page_size_selector(q: &DashboardQuery) -> Markup {
+    let current = q.limit.unwrap_or(100);
+    html! {
+        div.filter-group {
+            label { "page size" }
+            div.page-size-row role="radiogroup" aria-label="rows per page" {
+                @for n in PAGE_SIZES {
+                    @let is_active = current == *n;
+                    a class=(format!("page-size-opt {}", if is_active { "is-active" } else { "" }))
+                        aria-checked=(if is_active { "true" } else { "false" })
+                        href=(filter_url_override_u32(q, "limit", *n))
+                        title=(format!("show {n} rows per page")) {
+                        (n)
+                    }
+                }
+            }
+        }
     }
+}
+
+fn filter_url_override_u32(q: &DashboardQuery, key: &str, value: u32) -> String {
+    let mut pairs: Vec<(&'static str, String)> =
+        current_pairs(q).into_iter().filter(|(k, _)| *k != key).collect();
+    if key == "limit" {
+        pairs.push(("limit", value.to_string()));
+    }
+    pairs_to_url(&pairs)
 }

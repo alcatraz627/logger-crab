@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use axum::http::header;
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
 use chrono::{DateTime, Utc};
@@ -67,7 +69,34 @@ pub fn router(
         .route("/api", get(openapi::get_swagger_ui))
         .route("/openapi.yaml", get(openapi::get_openapi_yaml))
         .route("/docs", get(docs::get_docs))
+        .route("/favicon.svg", get(get_favicon))
+        .route("/favicon.ico", get(get_favicon))
+        .route("/assets/versable-logo.svg", get(get_favicon))
+        .route("/assets/versable-wordmark.svg", get(get_wordmark))
         .with_state(state)
+}
+
+const FAVICON_SVG: &str = include_str!("../assets/versable-logo.svg");
+const WORDMARK_SVG: &str = include_str!("../assets/versable-wordmark.svg");
+
+async fn get_favicon() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "image/svg+xml"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        FAVICON_SVG,
+    )
+}
+
+async fn get_wordmark() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "image/svg+xml"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        WORDMARK_SVG,
+    )
 }
 
 /// Mask a DATABASE_URL for display: strips userinfo in `scheme://user:pass@host`,
