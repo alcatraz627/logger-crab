@@ -133,9 +133,13 @@ impl HotStore for SqliteHotStore {
             qb.push(" AND ts <= ").push_bind(until.to_rfc3339());
         }
         if let Some(q) = &params.fts {
-            qb.push(" AND id IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ")
-                .push_bind(q.clone())
-                .push(")");
+            let trimmed = q.trim();
+            if !trimmed.is_empty() {
+                let phrase = format!("\"{}\"", trimmed.replace('"', "\"\""));
+                qb.push(" AND id IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ")
+                    .push_bind(phrase)
+                    .push(")");
+            }
         }
 
         qb.push(" ORDER BY ts DESC LIMIT ").push_bind(limit as i64);

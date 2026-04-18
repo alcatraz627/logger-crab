@@ -41,7 +41,7 @@ pub fn render_nav(active: Active, health_ok: Option<bool>) -> Markup {
                 a class=(cls(Active::Docs)) href="/docs" title="docs" {
                     (icon_book()) span { "/docs" }
                 }
-                a.nav-link href="/health" title="health endpoint" {
+                a.nav-link href="/health" target="_blank" rel="noopener" title="health endpoint (opens in new tab)" {
                     (icon_pulse()) span { "/health" }
                 }
                 a.nav-link href=(GITHUB_URL) target="_blank" rel="noopener" title="source on GitHub" {
@@ -97,6 +97,7 @@ nav.lc-nav .brand .brand-logo {
   filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 30%, transparent));
 }
 nav.lc-nav .brand .brand-name {
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
   font-size: 14px; font-weight: 600; letter-spacing: -0.01em; color: var(--text);
 }
 nav.lc-nav .nav-links {
