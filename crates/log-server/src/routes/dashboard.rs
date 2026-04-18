@@ -4,13 +4,13 @@ use chrono::{DateTime, Utc};
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 use serde::Deserialize;
 
+use super::nav::{
+    icon_box, icon_branch, icon_check, icon_globe, icon_hash, icon_search, icon_x, render_nav,
+    Active, BRAND_NAME, GITHUB_URL,
+};
 use super::{AppState, BootInfo};
 use crate::error::AppError;
 use crate::models::{ColdHealth, HotHealth, LogEvent, QueryParams};
-
-const PUBLIC_URL: &str = "https://logger-crab.onrender.com";
-const GITHUB_URL: &str = "https://github.com/versable/logger-crab";
-const BRAND_NAME: &str = "Versable logger-crab";
 
 const LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error", "fatal"];
 const PAGE_SIZES: &[u32] = &[50, 100, 250, 500];
@@ -181,34 +181,7 @@ fn render(
                 style { (PreEscaped(CSS)) }
             }
             body {
-                nav.lc-nav {
-                    a.brand href=(PUBLIC_URL) title="open public URL" {
-                        img.brand-logo src="/assets/versable-logo.svg" alt="Versable" width="22" height="22";
-                        span.brand-name { (BRAND_NAME) }
-                    }
-                    div.nav-links {
-                        a.nav-link href="/api" title="OpenAPI / Swagger UI" {
-                            (icon_code()) span { "/api" }
-                        }
-                        a.nav-link href="/docs" title="docs" {
-                            (icon_book()) span { "/docs" }
-                        }
-                        a.nav-link href="/health" title="health endpoint" {
-                            (icon_pulse()) span { "/health" }
-                        }
-                        a.nav-link href=(GITHUB_URL) target="_blank" rel="noopener" title="source on GitHub" {
-                            (icon_github()) span { "/github" }
-                        }
-                    }
-                    div.health-chip {
-                        @if health_ok {
-                            span.dot.ok { } "hot ok"
-                        } @else {
-                            span.dot.err { } "hot down"
-                        }
-                    }
-                    button.toggle id="theme-toggle" title="toggle light/dark" { "☾ / ☀" }
-                }
+                (render_nav(Active::Dashboard, Some(health_ok)))
 
                 form.filters method="get" action="/" {
                     div.filter-group {
@@ -248,8 +221,11 @@ fn render(
                         }
                     }
 
-                    (level_pill_filter(q))
-                    (page_size_selector(q))
+                    div.filter-row {
+                        (level_pill_filter(q))
+                        div.grow { }
+                        (page_size_selector(q))
+                    }
                 }
 
                 div.toolbar {
@@ -668,49 +644,6 @@ fn fmt_build_age(unix: u64) -> String {
     format!("{d}d ago")
 }
 
-// ── Inline icon helpers (Lucide-style 16px strokes) ──────────────────────────
-
-fn svg_icon(path_d: &str) -> Markup {
-    let svg = format!(
-        r#"<svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{path_d}</svg>"#
-    );
-    PreEscaped(svg)
-}
-
-fn icon_code() -> Markup {
-    svg_icon(r#"<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>"#)
-}
-fn icon_book() -> Markup {
-    svg_icon(r#"<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>"#)
-}
-fn icon_pulse() -> Markup {
-    svg_icon(r#"<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>"#)
-}
-fn icon_github() -> Markup {
-    svg_icon(r#"<path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/>"#)
-}
-fn icon_hash() -> Markup {
-    svg_icon(r#"<line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/>"#)
-}
-fn icon_box() -> Markup {
-    svg_icon(r#"<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>"#)
-}
-fn icon_globe() -> Markup {
-    svg_icon(r#"<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>"#)
-}
-fn icon_branch() -> Markup {
-    svg_icon(r#"<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>"#)
-}
-fn icon_search() -> Markup {
-    svg_icon(r#"<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>"#)
-}
-fn icon_check() -> Markup {
-    svg_icon(r#"<polyline points="20 6 9 17 4 12"/>"#)
-}
-fn icon_x() -> Markup {
-    svg_icon(r#"<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>"#)
-}
-
 // ── Custom rich select replacements ──────────────────────────────────────────
 
 /// Row of clickable level chips (replaces native `<select name="level">`).
@@ -719,7 +652,7 @@ fn icon_x() -> Markup {
 fn level_pill_filter(q: &DashboardQuery) -> Markup {
     let active = q.level.as_deref().unwrap_or("").to_ascii_lowercase();
     html! {
-        div.filter-group.full {
+        div.filter-group {
             label { "min level" }
             div.lvl-pill-row role="radiogroup" aria-label="filter by minimum severity" {
                 a.lvl-pill-opt.lvl-any

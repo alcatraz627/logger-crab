@@ -2,6 +2,7 @@ use axum::extract::State;
 use axum::response::Html;
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 
+use super::nav::{render_nav, Active, BRAND_NAME, NAV_CSS, TOGGLE_JS};
 use super::AppState;
 
 pub async fn get_docs(State(state): State<AppState>) -> Html<String> {
@@ -10,16 +11,6 @@ pub async fn get_docs(State(state): State<AppState>) -> Html<String> {
 }
 
 const CSS: &str = r#"
-:root {
-  --bg: #0d1117; --surface: #161b22; --surface2: #21262d; --text: #e6edf3;
-  --dim: #7d8590; --border: #30363d; --accent: #58a6ff; --accent2: #a371f7;
-  --warn: #d29922; --err: #f85149; --ok: #3fb950;
-}
-body.light {
-  --bg: #ffffff; --surface: #f6f8fa; --surface2: #eaeef2; --text: #1f2328;
-  --dim: #656d76; --border: #d0d7de; --accent: #0969da; --accent2: #8250df;
-  --warn: #9a6700; --err: #cf222e; --ok: #1a7f37;
-}
 * { box-sizing: border-box; }
 body {
   margin: 0; padding: 0; background: var(--bg); color: var(--text);
@@ -27,23 +18,6 @@ body {
   font-size: 14px; line-height: 1.6;
 }
 code, pre, .mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
-nav.lc-nav {
-  padding: 12px 24px; display: flex; align-items: center; gap: 18px;
-  border-bottom: 1px solid var(--border); background: var(--surface);
-  position: sticky; top: 0; z-index: 100;
-}
-nav.lc-nav h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
-nav.lc-nav a {
-  color: var(--dim); text-decoration: none; font-size: 13px;
-  padding: 4px 10px; border-radius: 6px; transition: all 0.15s;
-}
-nav.lc-nav a:hover { color: var(--text); background: var(--bg); }
-nav.lc-nav a.active { color: var(--accent); background: var(--bg); }
-.toggle {
-  margin-left: auto; background: transparent; color: var(--text);
-  border: 1px solid var(--border); padding: 4px 10px; border-radius: 6px;
-  cursor: pointer; font-size: 12px; font-family: inherit;
-}
 main { max-width: 860px; margin: 0 auto; padding: 32px 24px 80px; }
 h1.title { font-size: 32px; margin: 0 0 8px; letter-spacing: -0.02em; font-weight: 700; }
 .lede { color: var(--dim); font-size: 16px; margin: 0 0 32px; }
@@ -96,20 +70,6 @@ tr:hover td { background: var(--surface); }
 .link-card .sub { color: var(--dim); font-size: 12.5px; }
 "#;
 
-const TOGGLE_JS: &str = r#"
-(function() {
-  var saved = localStorage.getItem('logger-crab-theme');
-  if (saved === 'light') document.body.classList.add('light');
-  var btn = document.getElementById('theme-toggle');
-  if (!btn) return;
-  btn.addEventListener('click', function() {
-    document.body.classList.toggle('light');
-    localStorage.setItem('logger-crab-theme',
-      document.body.classList.contains('light') ? 'light' : 'dark');
-  });
-})();
-"#;
-
 fn render(state: &AppState) -> Markup {
     let boot = &*state.boot;
 
@@ -119,22 +79,17 @@ fn render(state: &AppState) -> Markup {
             head {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
-                title { "logger-crab · docs" }
+                title { (BRAND_NAME) " · docs" }
+                link rel="icon" type="image/svg+xml" href="/favicon.svg";
                 link rel="preconnect" href="https://fonts.googleapis.com";
                 link rel="preconnect" href="https://fonts.gstatic.com" crossorigin;
                 link rel="stylesheet"
                     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap";
+                style { (PreEscaped(NAV_CSS)) }
                 style { (PreEscaped(CSS)) }
             }
             body {
-                nav.lc-nav {
-                    h1 { "🦀 logger-crab" }
-                    a href="/" { "dashboard" }
-                    a href="/api" { "API" }
-                    a href="/docs".active { "docs" }
-                    a href="/health" { "health" }
-                    button.toggle id="theme-toggle" { "☾ / ☀" }
-                }
+                (render_nav(Active::Docs, None))
 
                 main {
                     h1.title { "logger-crab docs" }
@@ -291,6 +246,7 @@ fn render(state: &AppState) -> Markup {
         }
     }
 }
+
 
 const ARCH_DIAGRAM: &str = r#"┌─────────────┐  ┌─────────────┐  ┌──────────────┐  ┌──────────┐
 │ Next.js /   │  │ FastAPI     │  │ Credit Wkr   │  │ Cron     │

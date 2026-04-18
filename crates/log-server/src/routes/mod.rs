@@ -15,6 +15,7 @@ pub mod docs;
 pub mod health;
 pub mod ingest;
 pub mod logs;
+pub mod nav;
 pub mod openapi;
 
 #[derive(Debug, Clone)]

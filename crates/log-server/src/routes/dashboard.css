@@ -111,7 +111,12 @@ form.filters {
 .filter-group { display: flex; flex-direction: column; gap: 5px; min-width: 130px; }
 .filter-group.grow { flex: 1 1 200px; }
 .filter-group.actions { margin-left: auto; }
-.filter-group.full { flex: 1 1 100%; min-width: 100%; }
+.filter-row {
+  display: flex; align-items: flex-end; gap: 12px 14px;
+  flex: 1 1 100%; min-width: 100%;
+}
+.filter-row > .grow { flex: 1 1 auto; }
+.filter-row > .filter-group { min-width: auto; }
 .filter-group label {
   display: inline-flex; align-items: center; gap: 5px;
   font-size: 10.5px; color: var(--dim); text-transform: uppercase;
