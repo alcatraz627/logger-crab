@@ -53,8 +53,14 @@ async fn main() -> anyhow::Result<()> {
     };
 
     if std::env::var("SEED_ON_BOOT").ok().as_deref() == Some("1") {
-        if let Err(e) = seed_dummy_events(&hot).await {
-            warn!(error = %e, "SEED_ON_BOOT=1 failed");
+        match hot.health().await {
+            Ok(h) if h.rows == 0 => {
+                if let Err(e) = seed_dummy_events(&hot).await {
+                    warn!(error = %e, "SEED_ON_BOOT=1 failed");
+                }
+            }
+            Ok(h) => info!(rows = h.rows, "SEED_ON_BOOT=1 skipped — hot store already has rows"),
+            Err(e) => warn!(error = %e, "SEED_ON_BOOT=1 health check failed"),
         }
     }
 
