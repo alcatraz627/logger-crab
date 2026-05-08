@@ -1,27 +1,32 @@
 #!/usr/bin/env bash
 # smoke-ingest.sh — end-to-end smoke test for logger-crab /ingest endpoint.
 #
+# Loads tokens from `./.env` (run from the logger-crab repo root). The
+# production URL is hardcoded; override by exporting LOGGER_CRAB_URL
+# before running, or edit the URL block below.
+#
 # Validates:
 #   1. Bad bearer is rejected (401)
 #   2. Full-tier token is accepted (202)
 #   3. Public-tier token is accepted (202)
-#   4. Batches with mixed-validity events accept the good ones, reject the bad
-#   5. Burst of 20 public-tier events all land
-#   6. Dashboard is reachable
+#   4. Mixed-validity batch — accept good, reject bad with reason
+#   5. Burst of 20 public-tier events
+#   6. Dashboard reachable
 #
-# Required env vars (will prompt interactively if any are missing):
-#   LOGGER_CRAB_URL              https://logger-crab.onrender.com
-#   LOGGER_CRAB_TOKEN_FULL       full-tier token (server-side emitter)
-#   LOGGER_CRAB_TOKEN_PUBLIC     public-tier token (browser-side emitter)
-#   LOGGER_CRAB_SERVICE          optional, defaults to "local-smoke"
+# Tokens are read from .env in this priority order:
+#   full   = LOGGER_CRAB_TOKEN_FULL   ?? LOGGER_CRAB_TOKEN
+#   public = LOGGER_CRAB_TOKEN_PUBLIC ?? NEXT_PUBLIC_LOGGER_CRAB_TOKEN_PUBLIC
 #
 # Run with:
-#   bash scripts/smoke-ingest.sh
-#   (or chmod +x first, then: ./scripts/smoke-ingest.sh)
+#   ./scripts/smoke-ingest.sh
 
 set -uo pipefail
 
-# ─── Colors (only when TTY) ─────────────────────────────────────────────────
+# ─── Hardcoded URL — points at production logger-crab ─────────────────────
+LOGGER_CRAB_URL="${LOGGER_CRAB_URL:-https://logger-crab.onrender.com}"
+LOGGER_CRAB_SERVICE="${LOGGER_CRAB_SERVICE:-local-smoke}"
+
+# ─── Colors (only when TTY) ────────────────────────────────────────────────
 if [ -t 1 ]; then
   G=$'\033[0;32m'; R=$'\033[0;31m'; Y=$'\033[0;33m'
   D=$'\033[0;90m'; B=$'\033[1m'; X=$'\033[0m'
@@ -34,32 +39,41 @@ FAILED=0
 pass() { printf "${G}✓${X} %s\n" "$1"; PASSED=$((PASSED + 1)); }
 fail() { printf "${R}✗${X} %s\n" "$1"; FAILED=$((FAILED + 1)); }
 info() { printf "${D}  %s${X}\n" "$1"; }
+err() { printf "${R}error:${X} %s\n" "$1" >&2; }
 
-# ─── Env var checks + interactive prompts ──────────────────────────────────
-prompt_if_missing() {
-  local name="$1"
-  local hint="$2"
-  local current="${!name:-}"
-  if [ -z "$current" ]; then
-    printf "${Y}!${X} ${B}%s${X} is not set. ${D}%s${X}\n" "$name" "$hint"
-    printf "  Enter value (or Ctrl-C to abort): "
-    read -r value
-    if [ -z "$value" ]; then
-      printf "${R}Aborted: %s required.${X}\n" "$name"
-      exit 1
-    fi
-    export "$name=$value"
-  fi
-}
+# ─── Source .env from cwd ──────────────────────────────────────────────────
+ENV_FILE="${ENV_FILE:-.env}"
+if [ ! -f "$ENV_FILE" ]; then
+  err "no $ENV_FILE found in $(pwd)"
+  err "create one with at minimum:"
+  err "    LOGGER_CRAB_TOKEN=<full-tier token>"
+  err "    NEXT_PUBLIC_LOGGER_CRAB_TOKEN_PUBLIC=<public-tier token>"
+  err "or pass an alternate path: ENV_FILE=path/to/file ./scripts/smoke-ingest.sh"
+  exit 1
+fi
+# shellcheck disable=SC1090
+set -a; source "$ENV_FILE"; set +a
 
-prompt_if_missing LOGGER_CRAB_URL          "e.g. https://logger-crab.onrender.com"
-prompt_if_missing LOGGER_CRAB_TOKEN_FULL   "full-tier token (mapped to a *-server consumer)"
-prompt_if_missing LOGGER_CRAB_TOKEN_PUBLIC "public-tier token (mapped to a *-browser consumer)"
-LOGGER_CRAB_SERVICE="${LOGGER_CRAB_SERVICE:-local-smoke}"
+# ─── Resolve tokens (accept either naming convention) ──────────────────────
+TF="${LOGGER_CRAB_TOKEN_FULL:-${LOGGER_CRAB_TOKEN:-}}"
+TP="${LOGGER_CRAB_TOKEN_PUBLIC:-${NEXT_PUBLIC_LOGGER_CRAB_TOKEN_PUBLIC:-}}"
+
+if [ -z "$TF" ]; then
+  err "no full-tier token found in $ENV_FILE"
+  err "expected LOGGER_CRAB_TOKEN_FULL or LOGGER_CRAB_TOKEN"
+  exit 1
+fi
+if [ -z "$TP" ]; then
+  err "no public-tier token found in $ENV_FILE"
+  err "expected LOGGER_CRAB_TOKEN_PUBLIC or NEXT_PUBLIC_LOGGER_CRAB_TOKEN_PUBLIC"
+  exit 1
+fi
+
+# ─── Identify which env var name was used (for the banner) ─────────────────
+TF_SOURCE="$( [ -n "${LOGGER_CRAB_TOKEN_FULL:-}" ] && echo LOGGER_CRAB_TOKEN_FULL || echo LOGGER_CRAB_TOKEN )"
+TP_SOURCE="$( [ -n "${LOGGER_CRAB_TOKEN_PUBLIC:-}" ] && echo LOGGER_CRAB_TOKEN_PUBLIC || echo NEXT_PUBLIC_LOGGER_CRAB_TOKEN_PUBLIC )"
 
 URL="${LOGGER_CRAB_URL%/}"
-TF="$LOGGER_CRAB_TOKEN_FULL"
-TP="$LOGGER_CRAB_TOKEN_PUBLIC"
 SERVICE="$LOGGER_CRAB_SERVICE"
 RID="smoke-$(date +%s)-$$"
 TS="$(date -u +%FT%TZ)"
@@ -68,9 +82,24 @@ printf "\n${B}═══ logger-crab /ingest smoke ═══${X}\n"
 info "URL:     $URL"
 info "Service: $SERVICE"
 info "Request: $RID"
+info "Tokens:  full=\$$TF_SOURCE, public=\$$TP_SOURCE  (sourced from $ENV_FILE)"
 echo
 
-# ─── Test 1 — bad token → 401 ───────────────────────────────────────────────
+# ─── Test 0 — pre-flight: verify the new build is deployed ────────────────
+printf "${B}Test 0${X} — pre-flight: verify new build is deployed (crab favicon route)\n"
+code=$(curl -s -o /dev/null -w "%{http_code}" "$URL/assets/crab-logo.svg")
+if [ "$code" = "200" ]; then
+  pass "new build live (/assets/crab-logo.svg → 200)"
+else
+  fail "got $code on /assets/crab-logo.svg — old build still running?"
+  err "Push the latest changes and wait for Render to redeploy, then re-run."
+  echo
+  printf "${R}${B}Aborted — pre-flight failed.${X}\n"
+  exit 1
+fi
+echo
+
+# ─── Test 1 — bad token → 401 ──────────────────────────────────────────────
 printf "${B}Test 1${X} — bad bearer should return 401\n"
 code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$URL/ingest" \
   -H "Authorization: Bearer definitely-not-a-real-token-123" \
@@ -80,6 +109,7 @@ if [ "$code" = "401" ]; then
   pass "got 401 as expected"
 else
   fail "expected 401, got $code"
+  [ "$code" = "202" ] && info "server is in unauthenticated mode — check INGEST_TOKEN_* env vars in Render UI; settings modal will list malformed entries"
 fi
 echo
 

@@ -17,6 +17,11 @@ pub struct Config {
     pub aws_region: String,
     /// Allowed CORS origins. Empty = allow any (dev default).
     pub cors_origins: Vec<String>,
+    /// Hot → cold rotation cron settings.
+    pub rotation_enabled: bool,
+    pub rotation_interval_secs: u64,
+    pub hot_retention_hours: i64,
+    pub rotation_batch_size: u32,
     /// Non-fatal config warnings — surfaced at boot after tracing init.
     /// Includes malformed `INGEST_TOKEN_*` values and deprecated legacy vars.
     pub warnings: Vec<String>,
@@ -38,6 +43,22 @@ impl Config {
             s3_bucket: env::var("S3_LOGS_BUCKET").ok(),
             aws_region: env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".into()),
             cors_origins: parse_csv("CORS_ORIGINS"),
+            rotation_enabled: env::var("ROTATION_ENABLED")
+                .ok()
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(true),
+            rotation_interval_secs: env::var("ROTATION_INTERVAL_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3600),
+            hot_retention_hours: env::var("HOT_RETENTION_HOURS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(48),
+            rotation_batch_size: env::var("ROTATION_BATCH_SIZE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5000),
             warnings,
         })
     }

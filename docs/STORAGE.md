@@ -179,18 +179,79 @@ until the next successful operation clears it. This means the dashboard /
 `/health` retain an error message that explains *why* `ok=false` even after
 S3 has recovered, until a real write succeeds.
 
+## Rotation cron (hot → cold)
+
+A background task migrates events from hot to cold on a fixed cadence. Runs
+when `COLD_STORE=s3` and `ROTATION_ENABLED=true` (default true).
+
+### Configuration
+
+| Env var                  | Default | Purpose                                        |
+| ------------------------ | ------- | ---------------------------------------------- |
+| `ROTATION_ENABLED`       | `true`  | Set to `false` to disable rotation entirely    |
+| `ROTATION_INTERVAL_SECS` | `3600`  | Seconds between rotation cycles (default 1h)   |
+| `HOT_RETENTION_HOURS`    | `48`    | Events older than this get archived            |
+| `ROTATION_BATCH_SIZE`    | `5000`  | Max events read per query during pagination    |
+
+### Algorithm
+
+```
+every ROTATION_INTERVAL_SECS:
+  cutoff = now - HOT_RETENTION_HOURS
+
+  1. read all events from hot where ts < cutoff (paginated)
+  2. group events by (env, service, hour-bucket)
+  3. for each group: cold.write_batch(env, service, hour, events)
+  4. if ALL groups wrote successfully:
+       hot.drain_older_than(cutoff)   ← atomic SELECT+DELETE; stream discarded
+     else:
+       leave events in hot, retry next cycle
+```
+
+The first tick fires after `ROTATION_INTERVAL_SECS / 2` to give ingest time to
+settle after boot.
+
+### Failure semantics
+
+- **Single group failure → whole cycle aborts.** No partial deletes from hot.
+  The next tick will retry all groups, including the ones that succeeded
+  (which means duplicate writes to S3 — but each hour-bucket key is a single
+  object, so re-writing replaces it cleanly).
+- **No retry within a cycle.** Failure is logged at ERROR with `env`,
+  `service`, `hour`, `count`, and the AWS error message. Operators see this
+  in Render's log feed and the dashboard footer's `last error` line.
+- **Race window:** between the read (step 1) and the delete (step 4), an
+  emitter writing events with backdated timestamps (`ts < cutoff`) could
+  bypass archival. With a 48h cutoff this is essentially never, but it's a
+  known limitation. Documented for future hardening.
+
+### Observability
+
+After each successful cycle, a structured INFO line is emitted:
+
+```
+INFO  rotation cycle complete archived=1842 groups=12 failed_groups=0
+```
+
+Plus the cold store's `events_archived_total` increments and `last_rotation`
+updates — both visible in `/health` and the dashboard footer.
+
+If rotation is intentionally disabled (`ROTATION_ENABLED=false` or
+`COLD_STORE=noop`), boot logs:
+
+```
+INFO  rotation task NOT spawned cold_store=noop rotation_enabled=true
+```
+
 ## What's not implemented (yet)
 
-- **Rotation cron**: hot → cold migration. Currently the cold tier exists but
-  nothing pushes events to it. Hot tier accumulates indefinitely on disk.
-  Manual `write_batch` calls work; no scheduled rotation yet.
 - **Cold-tier query**: `/logs?since=...` filters that span beyond hot
   retention. The trait method `read_range` exists but returns an empty
   stream. Implementing requires LIST-by-prefix + GET + decode + filter, plus
   pagination through hour buckets.
-- **Lifecycle policies**: belong on the S3 bucket itself, configured outside
-  this service. Recommended starting point: transition to Standard-IA after
-  30 days, expire after 365.
+- **S3 lifecycle policies**: belong on the S3 bucket itself, configured
+  outside this service. Recommended starting point: transition to Standard-IA
+  after 30 days, expire after 365.
 
 ## Testing
 

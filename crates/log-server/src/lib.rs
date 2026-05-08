@@ -5,6 +5,7 @@
 pub mod config;
 pub mod error;
 pub mod models;
+pub mod rotation;
 pub mod routes;
 pub mod seed;
 pub mod store;

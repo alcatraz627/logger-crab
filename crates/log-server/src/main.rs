@@ -4,6 +4,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use chrono::Utc;
 use log_server::config::Config;
+use log_server::rotation::{self, RotationConfig};
 use log_server::routes;
 use log_server::routes::{mask_database_url, BootInfo};
 use log_server::seed::seed_dummy_events;
@@ -101,6 +102,23 @@ async fn main() -> anyhow::Result<()> {
         has_dashboard_token: cfg.dashboard_token.is_some(),
         database_url_masked: mask_database_url(&cfg.database_url),
     });
+
+    // Spawn hot → cold rotation cron when cold is real and rotation isn't disabled.
+    // No-op when COLD_STORE=noop (rotation would just delete events).
+    if cfg.cold_store == "s3" && cfg.rotation_enabled {
+        let rcfg = RotationConfig {
+            interval_secs: cfg.rotation_interval_secs,
+            hot_retention_hours: cfg.hot_retention_hours,
+            batch_size: cfg.rotation_batch_size,
+        };
+        rotation::spawn(hot.clone(), cold.clone(), rcfg);
+    } else {
+        info!(
+            cold_store = %cfg.cold_store,
+            rotation_enabled = cfg.rotation_enabled,
+            "rotation task NOT spawned"
+        );
+    }
 
     let app = routes::router(&cfg, hot, cold, boot);
     let addr: SocketAddr = ([0, 0, 0, 0], cfg.port).into();
