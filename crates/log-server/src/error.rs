@@ -31,15 +31,14 @@ pub enum StorageError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, body) = match &self {
-            AppError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
-            AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".into()),
-            AppError::NotFound => (StatusCode::NOT_FOUND, "not found".into()),
+        match &self {
+            AppError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()).into_response(),
+            AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
+            AppError::NotFound => (StatusCode::NOT_FOUND, "not found").into_response(),
             AppError::Storage(_) | AppError::Other(_) => {
                 tracing::error!(error = %self, "internal error");
-                (StatusCode::INTERNAL_SERVER_ERROR, "internal error".into())
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
             }
-        };
-        (status, body).into_response()
+        }
     }
 }

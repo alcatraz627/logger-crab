@@ -51,7 +51,9 @@ impl HotStore for SqliteHotStore {
         let mut rejected = 0u32;
 
         for e in events {
-            if e.request_id.is_empty() || e.event.is_empty() {
+            // Only `event` is required at the storage layer. `request_id`
+            // is optional — emitter-stamped when present, empty otherwise.
+            if e.event.is_empty() {
                 rejected += 1;
                 continue;
             }

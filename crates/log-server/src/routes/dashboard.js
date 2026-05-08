@@ -117,6 +117,23 @@
   });
 })();
 
+// Refresh button — reloads the current URL (preserves all filter state).
+(function () {
+  var btn = document.getElementById('refresh-btn');
+  if (!btn) return;
+  btn.addEventListener('click', function () {
+    btn.classList.add('refreshing');
+    location.reload();
+  });
+  // Keyboard shortcut: R (when not in an input)
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'r' && e.key !== 'R') return;
+    var t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    btn.click();
+  });
+})();
+
 // Settings modal — open/close wiring.
 (function () {
   var dialog = document.getElementById('settings-modal');

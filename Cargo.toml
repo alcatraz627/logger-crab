@@ -48,6 +48,7 @@ futures = "0.3"
 bytes = "1.8"
 flate2 = "1.0"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+dotenvy = "0.15"
 
 [profile.release]
 lto = "thin"

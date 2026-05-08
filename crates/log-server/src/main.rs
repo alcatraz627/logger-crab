@@ -18,6 +18,12 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Best-effort .env load. Picks up `.env` from the current working
+    // directory when running locally via `cargo run`. In production
+    // (Render, Docker), there's no .env file so this is a silent no-op
+    // and env vars come from the platform runtime.
+    let _ = dotenvy::dotenv();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),

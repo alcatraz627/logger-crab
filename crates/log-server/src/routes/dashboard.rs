@@ -1,5 +1,6 @@
 use axum::extract::{Query, State};
-use axum::response::Html;
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use chrono::{DateTime, Utc};
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 use serde::Deserialize;
@@ -26,12 +27,37 @@ pub struct DashboardQuery {
     pub q: Option<String>,
     pub limit: Option<u32>,
     pub cursor: Option<String>,
+    /// Paste-and-go login: visiting `/?token=XXX` validates the token,
+    /// sets the dashboard cookie, and redirects back to `/` so the URL
+    /// no longer carries the secret.
+    pub token: Option<String>,
 }
 
 pub async fn get_dashboard(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<DashboardQuery>,
-) -> Result<Html<String>, AppError> {
+) -> Result<Response, AppError> {
+    let expected = state.dashboard_token.as_deref().map(|s| s.as_str());
+
+    // Paste-and-go: GET /?token=XXX → set cookie, 302 to / (so the secret
+    // doesn't sit in the address bar or browser history).
+    if let Some(token) = q.token.as_deref() {
+        if let Some(exp) = expected {
+            if token == exp {
+                return Ok(login_redirect_with_cookie(token));
+            }
+        }
+        // Token in query but invalid (or no token configured) → fall through
+        // to the login page, which will render with an error notice.
+        return Ok(render_login_page(true).into_response());
+    }
+
+    // No ?token= param — check existing auth (cookie or Bearer).
+    if !super::auth::check_dashboard_auth(&headers, expected) {
+        return Ok(render_login_page(false).into_response());
+    }
+
     let page_size = q.limit.unwrap_or(100).clamp(10, 500);
     let params = QueryParams {
         request_id: not_empty(&q.request_id),
@@ -60,7 +86,7 @@ pub async fn get_dashboard(
         &state.ingest_tokens,
         &state.config_warnings,
     );
-    Ok(Html(markup.into_string()))
+    Ok(Html(markup.into_string()).into_response())
 }
 
 fn not_empty(s: &Option<String>) -> Option<String> {
@@ -261,6 +287,39 @@ fn render(
     let row_count = health.map(|h| h.rows).unwrap_or(0);
     let oldest = health.and_then(|h| h.oldest_ts);
 
+    // Distinct values from currently-loaded events power the <datalist>
+    // autocomplete on filter inputs. Cheap (in-memory dedup over <= 500 rows).
+    let mut services: Vec<&str> = events
+        .iter()
+        .filter_map(|e| e.service.as_deref())
+        .collect();
+    services.sort();
+    services.dedup();
+
+    let mut envs: Vec<&str> = events.iter().filter_map(|e| e.env.as_deref()).collect();
+    envs.sort();
+    envs.dedup();
+
+    // Event prefixes: take everything up to the first "." for namespace-style
+    // names like `pipeline.start` → `pipeline.`. Fall back to the full name
+    // for events with no dot.
+    let mut event_prefixes: Vec<String> = events
+        .iter()
+        .map(|e| match e.event.split_once('.') {
+            Some((prefix, _)) => format!("{prefix}."),
+            None => e.event.clone(),
+        })
+        .collect();
+    event_prefixes.sort();
+    event_prefixes.dedup();
+
+    let any_filter_active = q.request_id.is_some()
+        || q.service.is_some()
+        || q.env.is_some()
+        || q.event_prefix.is_some()
+        || q.level.is_some()
+        || q.q.is_some();
+
     html! {
         (DOCTYPE)
         html {
@@ -278,30 +337,43 @@ fn render(
             body {
                 (render_nav(Active::Dashboard, Some(health_ok)))
 
+                // Datalists power native browser autocomplete on the inputs
+                // below. Distinct values come from the currently-loaded events
+                // — narrow but useful (the values that exist in your view).
+                datalist id="dl-services" {
+                    @for s in &services { option value=(s) {} }
+                }
+                datalist id="dl-envs" {
+                    @for v in &envs { option value=(v) {} }
+                }
+                datalist id="dl-event-prefixes" {
+                    @for p in &event_prefixes { option value=(p) {} }
+                }
+
                 form.filters method="get" action="/" {
                     div.filter-group {
                         label { (icon_hash()) "request_id" }
-                        input type="text" name="request_id"
+                        input type="text" name="request_id" autocomplete="off"
                             value=[q.request_id.as_deref()] placeholder="req_abc_01";
                     }
                     div.filter-group {
                         label { (icon_box()) "service" }
-                        input type="text" name="service"
+                        input type="text" name="service" list="dl-services" autocomplete="off"
                             value=[q.service.as_deref()] placeholder="versable-api";
                     }
                     div.filter-group {
                         label { (icon_globe()) "env" }
-                        input type="text" name="env"
+                        input type="text" name="env" list="dl-envs" autocomplete="off"
                             value=[q.env.as_deref()] placeholder="prod";
                     }
                     div.filter-group {
                         label { (icon_branch()) "event prefix" }
-                        input type="text" name="event_prefix"
+                        input type="text" name="event_prefix" list="dl-event-prefixes" autocomplete="off"
                             value=[q.event_prefix.as_deref()] placeholder="pipeline.";
                     }
                     div.filter-group.grow {
                         label { (icon_search()) "full-text search" }
-                        input type="text" name="q"
+                        input type="text" name="q" autocomplete="off"
                             value=[q.q.as_deref()] placeholder="message or payload…";
                     }
                     div.filter-group.actions {
@@ -325,8 +397,13 @@ fn render(
 
                 div.toolbar {
                     div.count {
-                        span.num { (row_count) } " total · "
-                        span.num { (total) } " shown"
+                        @if any_filter_active {
+                            span.num { (total) } " matching · "
+                            span.dim { (row_count) " in store" }
+                        } @else {
+                            span.num { (total) } " shown · "
+                            span.dim { (row_count) " total" }
+                        }
                         @if let Some(ts) = oldest {
                             span.dim { " · oldest " (fmt_relative(ts)) }
                         }
@@ -430,16 +507,25 @@ fn render(
                                                 span.evt-leaf { (leaf) }
                                             }
                                         }
-                                        td {
-                                            a.rid href=(filter_url_override(q, "request_id", &e.request_id))
-                                                title=(format!("filter by request_id: {}", e.request_id)) {
-                                                (&e.request_id[..e.request_id.len().min(14)])
+                                        td.rid-cell {
+                                            @if e.request_id.is_empty() {
+                                                span.rid-empty title="no request_id" { "—" }
+                                            } @else {
+                                                a.rid href=(filter_url_override(q, "request_id", &e.request_id))
+                                                    title=(format!("filter by request_id: {}", e.request_id)) {
+                                                    (rid_short(&e.request_id))
+                                                }
                                             }
                                         }
                                         td.msg {
                                             details {
                                                 summary {
-                                                    (e.message.as_deref().unwrap_or(""))
+                                                    @let preview = render_msg_preview(e);
+                                                    @if preview.is_empty() {
+                                                        span.msg-dim { "(no message)" }
+                                                    } @else {
+                                                        span.msg-text { (preview) }
+                                                    }
                                                 }
                                                 div.payload {
                                                     pre { code {
@@ -747,6 +833,247 @@ fn render_footer(
                 }
             }
         }
+    }
+}
+
+/// Builds the 302 redirect that lands the user on `/` with the dashboard
+/// cookie set. `Max-Age=2592000` = 30 days; `HttpOnly` blocks JS access;
+/// `SameSite=Strict` blocks cross-site auto-send. Cookie is set on `Path=/`
+/// so it applies to all dashboard routes.
+fn login_redirect_with_cookie(token: &str) -> Response {
+    let cookie = format!(
+        "{}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000",
+        super::auth::DASHBOARD_COOKIE,
+        token
+    );
+    let mut response = Redirect::to("/").into_response();
+    if let Ok(value) = HeaderValue::from_str(&cookie) {
+        response.headers_mut().insert(header::SET_COOKIE, value);
+    }
+    response
+}
+
+/// Custom login page — single password input, no username field. Replaces
+/// the browser-native HTTP Basic prompt. Submits via GET to `/?token=...`
+/// which the dashboard handler turns into a cookie + redirect.
+fn render_login_page(token_was_invalid: bool) -> impl IntoResponse {
+    let markup = html! {
+        (DOCTYPE)
+        html {
+            head {
+                meta charset="utf-8";
+                meta name="viewport" content="width=device-width, initial-scale=1";
+                title { (BRAND_NAME) " · login" }
+                link rel="icon" type="image/svg+xml" href="/favicon.svg";
+                link rel="preconnect" href="https://fonts.googleapis.com";
+                link rel="preconnect" href="https://fonts.gstatic.com" crossorigin;
+                link rel="stylesheet"
+                    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap";
+                style { (PreEscaped(LOGIN_CSS)) }
+            }
+            body.login-body {
+                main.login-card {
+                    div.login-brand {
+                        img.login-logo src="/assets/crab-logo.svg" alt="logger-crab" width="48" height="48";
+                        h1.login-title { (BRAND_NAME) }
+                    }
+                    @if token_was_invalid {
+                        div.login-error { "Invalid token. Try again." }
+                    }
+                    form method="get" action="/" {
+                        label for="token" { "Dashboard token" }
+                        input type="password" id="token" name="token"
+                            autocomplete="current-password"
+                            autofocus
+                            placeholder="paste your DASHBOARD_TOKEN value";
+                        button type="submit" { "Sign in" }
+                    }
+                    p.login-hint {
+                        "API consumers can use "
+                        code { "Authorization: Bearer <token>" }
+                        " instead — see "
+                        a href="/docs" { "/docs" } "."
+                    }
+                }
+                script { (PreEscaped(LOGIN_THEME_JS)) }
+            }
+        }
+    };
+    let mut response = (StatusCode::OK, Html(markup.into_string())).into_response();
+    // Status is 200 (not 401) because we're rendering a real page; the
+    // browser will display the form rather than its native error page.
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+const LOGIN_CSS: &str = r#"
+:root {
+  --bg: #0d1117; --surface: #161b22; --surface2: #21262d; --text: #e6edf3;
+  --dim: #7d8590; --muted: #484f58; --border: #30363d;
+  --accent: #58a6ff; --err: #f85149;
+}
+body.light {
+  --bg: #ffffff; --surface: #f6f8fa; --surface2: #eaeef2; --text: #1f2328;
+  --dim: #656d76; --muted: #8c959f; --border: #d0d7de;
+  --accent: #0969da; --err: #cf222e;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body.login-body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 32px;
+  box-shadow: 0 16px 40px rgba(0,0,0,0.35);
+}
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 28px;
+}
+.login-logo {
+  display: block;
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 30%, transparent));
+}
+.login-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.login-error {
+  background: color-mix(in srgb, var(--err) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--err) 40%, var(--border));
+  color: var(--err);
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+form { display: flex; flex-direction: column; gap: 8px; }
+label {
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+  font-weight: 500;
+}
+input[type="password"] {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+input[type="password"]::placeholder { color: var(--muted); }
+input[type="password"]:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+input[type="password"]:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+button[type="submit"] {
+  margin-top: 14px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border));
+  background: var(--accent);
+  color: white;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.12s ease, transform 0.12s ease;
+}
+button[type="submit"]:hover { filter: brightness(1.08); }
+button[type="submit"]:active { transform: translateY(1px); }
+.login-hint {
+  margin: 22px 0 0 0;
+  font-size: 12px;
+  color: var(--dim);
+  line-height: 1.5;
+}
+.login-hint code {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--text);
+}
+.login-hint a { color: var(--accent); text-decoration: none; }
+.login-hint a:hover { text-decoration: underline; }
+"#;
+
+const LOGIN_THEME_JS: &str = r#"
+(function() {
+  var saved = localStorage.getItem('logger-crab-theme');
+  if (saved === 'light') document.body.classList.add('light');
+})();
+"#;
+
+/// Compact display form of a request_id: first 8 chars + ellipsis if longer.
+/// Single-line, fixed width — no wrapping in narrow table columns.
+fn rid_short(rid: &str) -> String {
+    if rid.chars().count() <= 10 {
+        rid.to_string()
+    } else {
+        let head: String = rid.chars().take(8).collect();
+        format!("{head}…")
+    }
+}
+
+/// Inline preview of an event's message + payload for the collapsed details row.
+/// Shows the message if present; otherwise the first useful payload key=value pair.
+/// Truncated to ~80 chars so it fits the table cell on one line.
+fn render_msg_preview(e: &LogEvent) -> String {
+    if let Some(msg) = e.message.as_deref().filter(|m| !m.is_empty()) {
+        return truncate_chars(msg, 80);
+    }
+    // No message — pull one or two fields from payload to give a hint.
+    if let Some(obj) = e.payload.as_object() {
+        let parts: Vec<String> = obj
+            .iter()
+            .filter(|(k, _)| !k.starts_with('_')) // skip server-stamped fields like _auth_consumer
+            .take(2)
+            .map(|(k, v)| match v {
+                serde_json::Value::String(s) => format!("{k}={s}"),
+                _ => format!("{k}={v}"),
+            })
+            .collect();
+        if !parts.is_empty() {
+            return truncate_chars(&parts.join(" · "), 80);
+        }
+    }
+    String::new()
+}
+
+fn truncate_chars(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        let head: String = s.chars().take(n.saturating_sub(1)).collect();
+        format!("{head}…")
     }
 }
 

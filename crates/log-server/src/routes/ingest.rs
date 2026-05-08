@@ -106,7 +106,11 @@ fn build_event(
     res: &Resource,
     consumer_name: &str,
 ) -> Result<LogEvent, String> {
-    let request_id = raw.request_id.ok_or("missing request_id")?;
+    // request_id is optional — events without a rid are accepted (system
+    // events, cron, ad-hoc emissions). Stored as empty string. The dashboard
+    // renders "—" for empty rids and the request-trail filter naturally
+    // skips them.
+    let request_id = raw.request_id.unwrap_or_default();
     let event = raw.event.ok_or("missing event name")?;
     let ts = raw.ts.unwrap_or_else(Utc::now);
     let severity_number = raw.severity_number.unwrap_or(9);
@@ -235,10 +239,31 @@ mod tests {
     }
 
     #[test]
-    fn build_event_rejects_missing_request_id() {
+    fn build_event_accepts_missing_request_id() {
         let raw = RawEvent {
             request_id: None,
-            event: Some("e".into()),
+            event: Some("system.boot".into()),
+            severity_number: None,
+            severity_text: None,
+            ts: None,
+            message: None,
+            service: None,
+            env: None,
+            user_id: None,
+            session_id: None,
+            client_id: None,
+            payload: Value::Null,
+        };
+        let res = Resource { service: None, env: None, deploy: None, system: None };
+        let event = build_event(raw, &res, "anyone").expect("should accept missing rid");
+        assert_eq!(event.request_id, "", "missing rid stored as empty string");
+    }
+
+    #[test]
+    fn build_event_rejects_missing_event_name() {
+        let raw = RawEvent {
+            request_id: Some("r".into()),
+            event: None,
             severity_number: None,
             severity_text: None,
             ts: None,
@@ -252,7 +277,7 @@ mod tests {
         };
         let res = Resource { service: None, env: None, deploy: None, system: None };
         let result = build_event(raw, &res, "anyone");
-        assert!(result.is_err());
+        assert!(result.is_err(), "event name is still required");
     }
 
     #[test]

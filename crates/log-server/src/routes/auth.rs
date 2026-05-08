@@ -67,6 +67,72 @@ pub fn require_bearer(headers: &HeaderMap, expected: Option<&str>) -> Result<(),
     }
 }
 
+/// Cookie name set on successful dashboard login. `HttpOnly` + `SameSite=Strict`
+/// so it's not exposed to JS or sent on cross-site requests.
+pub const DASHBOARD_COOKIE: &str = "lc_dash";
+
+/// Dashboard auth — checks cookie first (set by login), then Bearer (for
+/// API consumers like curl). Used by the JSON `/logs` endpoint and
+/// `/health/full`. Returns `AppError::Unauthorized` on failure (no
+/// `WWW-Authenticate` header — the dashboard's GET handler shows a custom
+/// HTML login page on miss instead of triggering a browser prompt).
+///
+/// Returns `Ok(())` if no token is configured (dev mode).
+pub fn require_dashboard_auth(
+    headers: &HeaderMap,
+    expected: Option<&str>,
+) -> Result<(), AppError> {
+    if check_dashboard_auth(headers, expected) {
+        Ok(())
+    } else {
+        Err(AppError::Unauthorized)
+    }
+}
+
+/// Predicate version — returns `true` if the request carries valid dashboard
+/// auth via cookie OR Bearer. Used by the dashboard HTML handler so it can
+/// branch (render dashboard vs. render login page) without the error path.
+pub fn check_dashboard_auth(headers: &HeaderMap, expected: Option<&str>) -> bool {
+    let Some(expected) = expected else {
+        return true;
+    };
+
+    // 1. Cookie — set by /?token=... paste-and-go flow. This is the path
+    //    that makes the dashboard "remember" you across visits.
+    if let Some(token) = extract_cookie(headers, DASHBOARD_COOKIE) {
+        if constant_time_eq(token.as_bytes(), expected.as_bytes()) {
+            return true;
+        }
+    }
+
+    // 2. Authorization: Bearer — for curl / API consumers.
+    if let Some(value) = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    {
+        if let Some(token) = value.strip_prefix("Bearer ") {
+            if constant_time_eq(token.as_bytes(), expected.as_bytes()) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn extract_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
+    let raw = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
+    for pair in raw.split(';') {
+        let pair = pair.trim();
+        if let Some((k, v)) = pair.split_once('=') {
+            if k == name {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Multi-token bearer check returning the matching record (for attribution).
 ///
 /// - Empty `tokens` slice → returns `Unauthenticated` (dev mode, no auth gate).
@@ -199,6 +265,56 @@ mod tests {
     #[test]
     fn require_bearer_rejects_wrong_token() {
         let result = require_bearer(&auth_headers("wrong"), Some("right"));
+        assert!(matches!(result, Err(AppError::Unauthorized)));
+    }
+
+    // ─── Dashboard auth (Cookie OR Bearer) ─────────────────────────────────
+
+    fn cookie_headers(name: &str, value: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(
+            "cookie",
+            HeaderValue::from_str(&format!("{name}={value}")).unwrap(),
+        );
+        h
+    }
+
+    #[test]
+    fn dashboard_auth_passes_when_no_token_configured() {
+        assert!(require_dashboard_auth(&HeaderMap::new(), None).is_ok());
+        assert!(check_dashboard_auth(&HeaderMap::new(), None));
+    }
+
+    #[test]
+    fn dashboard_auth_accepts_bearer() {
+        assert!(check_dashboard_auth(&auth_headers("dash-tok"), Some("dash-tok")));
+    }
+
+    #[test]
+    fn dashboard_auth_accepts_cookie() {
+        let h = cookie_headers(DASHBOARD_COOKIE, "dash-tok");
+        assert!(check_dashboard_auth(&h, Some("dash-tok")));
+    }
+
+    #[test]
+    fn dashboard_auth_rejects_wrong_cookie() {
+        let h = cookie_headers(DASHBOARD_COOKIE, "wrong");
+        assert!(!check_dashboard_auth(&h, Some("dash-tok")));
+    }
+
+    #[test]
+    fn dashboard_auth_extracts_correct_cookie_among_many() {
+        let mut h = HeaderMap::new();
+        h.insert(
+            "cookie",
+            HeaderValue::from_str(&format!("foo=bar; {}=dash-tok; baz=qux", DASHBOARD_COOKIE)).unwrap(),
+        );
+        assert!(check_dashboard_auth(&h, Some("dash-tok")));
+    }
+
+    #[test]
+    fn dashboard_auth_rejects_missing_auth() {
+        let result = require_dashboard_auth(&HeaderMap::new(), Some("dash-tok"));
         assert!(matches!(result, Err(AppError::Unauthorized)));
     }
 }

@@ -56,6 +56,9 @@ pub fn render_nav(active: Active, health_ok: Option<bool>) -> Markup {
                 }
             }
             @if show_settings {
+                button.toggle id="refresh-btn" type="button" title="refresh (R)" {
+                    (icon_refresh())
+                }
                 button.toggle id="settings-open" type="button" title="settings" aria-haspopup="dialog" {
                     (icon_gear())
                 }
@@ -63,6 +66,10 @@ pub fn render_nav(active: Active, health_ok: Option<bool>) -> Markup {
             button.toggle id="theme-toggle" title="toggle light/dark" { "☾ / ☀" }
         }
     }
+}
+
+pub fn icon_refresh() -> Markup {
+    svg_icon(r#"<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>"#)
 }
 
 pub fn icon_gear() -> Markup {

@@ -34,7 +34,7 @@ impl Config {
         check_deprecated_vars(&mut warnings);
 
         Ok(Self {
-            port: env::var("PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(8080),
+            port: env::var("PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(8089),
             database_url: env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite::memory:".into()),
             hot_store: env::var("HOT_STORE").unwrap_or_else(|_| "memory".into()),
             cold_store: env::var("COLD_STORE").unwrap_or_else(|_| "noop".into()),

@@ -72,6 +72,7 @@ pub fn router(
     Router::new()
         .route("/", get(dashboard::get_dashboard))
         .route("/health", get(health::get_health))
+        .route("/health/full", get(health::get_health_full))
         .route("/ingest", post(ingest::post_ingest))
         .route("/logs", get(logs::get_logs))
         .route("/api", get(openapi::get_swagger_ui))

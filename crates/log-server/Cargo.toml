@@ -46,3 +46,4 @@ uuid.workspace = true
 futures.workspace = true
 bytes.workspace = true
 flate2.workspace = true
+dotenvy.workspace = true
