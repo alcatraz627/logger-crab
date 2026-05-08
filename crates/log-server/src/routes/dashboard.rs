@@ -699,7 +699,24 @@ fn render_footer(
                     div.ft-row {
                         span.ft-k { "status" }
                         @if c.ok { span.ft-v.ok { "● online" } }
-                        @else { span.ft-v.warn { "○ unconfigured" } }
+                        @else { span.ft-v.err { "● offline" } }
+                    }
+                    div.ft-row {
+                        span.ft-k { "backend" }
+                        span.ft-v.mono { (c.backend) }
+                    }
+                    @if let Some(bucket) = &c.bucket {
+                        div.ft-row { span.ft-k { "bucket" } span.ft-v.mono { (bucket) } }
+                    } @else if let Some(bucket) = &boot.s3_bucket {
+                        div.ft-row { span.ft-k { "bucket" } span.ft-v.mono { (bucket) } }
+                    } @else {
+                        div.ft-row { span.ft-k { "bucket" } span.ft-v.dim { "—" } }
+                    }
+                    @if c.events_archived_total > 0 {
+                        div.ft-row {
+                            span.ft-k { "archived" }
+                            span.ft-v.mono { (c.events_archived_total) " events" }
+                        }
                     }
                     @if let Some(ts) = c.last_rotation {
                         div.ft-row {
@@ -711,16 +728,35 @@ fn render_footer(
                     } @else {
                         div.ft-row { span.ft-k { "last rotation" } span.ft-v.dim { "—" } }
                     }
+                    @if let Some(ts) = c.last_health_check {
+                        div.ft-row {
+                            span.ft-k { "last probe" }
+                            span.ft-v title=(ts.format("%Y-%m-%d %H:%M:%S UTC").to_string()) {
+                                (fmt_relative(ts))
+                            }
+                        }
+                    }
+                    @if let Some(err) = &c.last_error {
+                        div.ft-row {
+                            span.ft-k { "error" }
+                            span.ft-v.err title=(err) { (truncate_err(err, 32)) }
+                        }
+                    }
                 } @else {
                     div.ft-row { span.ft-k { "status" } span.ft-v.warn { "○ unavailable" } }
                 }
-                @if let Some(bucket) = &boot.s3_bucket {
-                    div.ft-row { span.ft-k { "bucket" } span.ft-v.mono { (bucket) } }
-                } @else {
-                    div.ft-row { span.ft-k { "bucket" } span.ft-v.dim { "—" } }
-                }
             }
         }
+    }
+}
+
+fn truncate_err(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(n.saturating_sub(1)).collect();
+        out.push('…');
+        out
     }
 }
 

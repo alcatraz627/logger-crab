@@ -4,16 +4,20 @@ use serde::Serialize;
 
 use super::AppState;
 use crate::error::AppError;
+use crate::models::{ColdHealth, HotHealth};
 
+/// Rich /health response. `ok` is the AND of hot + cold so a single check
+/// catches either tier going down. Per-tier detail surfaces below for ops.
 #[derive(Serialize)]
 pub struct HealthResponse {
     ok: bool,
-    hot_ok: bool,
-    cold_ok: bool,
+    hot: HotHealth,
+    cold: ColdHealth,
 }
 
 pub async fn get_health(State(state): State<AppState>) -> Result<Json<HealthResponse>, AppError> {
     let hot = state.hot.health().await?;
     let cold = state.cold.health().await?;
-    Ok(Json(HealthResponse { ok: hot.ok && cold.ok, hot_ok: hot.ok, cold_ok: cold.ok }))
+    let ok = hot.ok && cold.ok;
+    Ok(Json(HealthResponse { ok, hot, cold }))
 }

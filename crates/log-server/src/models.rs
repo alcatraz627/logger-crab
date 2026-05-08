@@ -73,5 +73,21 @@ pub struct HotHealth {
 #[derive(Debug, Clone, Serialize)]
 pub struct ColdHealth {
     pub ok: bool,
+    /// Backend in use: "noop" or "s3". Surfaces in /health and dashboard.
+    pub backend: String,
+    /// Bucket name (S3 only). None for noop.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bucket: Option<String>,
+    /// Most recent successful write to cold tier.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_rotation: Option<DateTime<Utc>>,
+    /// Last error from a write or health probe — cleared on next success.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// Cumulative count of events successfully archived since process start.
+    #[serde(default)]
+    pub events_archived_total: u64,
+    /// Timestamp of the most recent backend reachability check.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_health_check: Option<DateTime<Utc>>,
 }

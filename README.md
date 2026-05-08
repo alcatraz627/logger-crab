@@ -191,11 +191,12 @@ curl -X POST http://localhost:8099/ingest \
 | `PORT`            | `8080`            | HTTP port                                                                                   |
 | `HOT_STORE`       | `memory`          | `memory` \| `sqlite`                                                                        |
 | `DATABASE_URL`    | `sqlite::memory:` | SQLite path (`sqlite://./var/dev.db`)                                                       |
-| `COLD_STORE`      | `noop`            | `noop` \| `s3` (s3 currently degrades to noop, Phase 5)                                     |
-| `INGEST_TOKEN`    | _unset_           | Bearer guarding `POST /ingest`. If unset, `/ingest` is open (dev only)                      |
+| `COLD_STORE`      | `noop`            | `noop` \| `s3` — `s3` writes hourly NDJSON.gz to `S3_LOGS_BUCKET`; see [STORAGE.md](docs/STORAGE.md) |
+| `INGEST_TOKEN_<NAME>` | _unset_       | Per-consumer bearer, `<tier>:<token>` value (`full` or `public`). Multiple rows allowed; if all unset, `/ingest` is open (dev only) |
 | `DASHBOARD_TOKEN` | _unset_           | Bearer guarding `GET /logs`. Dashboard HTML is always unauth — front with a proxy if public |
-| `S3_LOGS_BUCKET`  | _unset_           | Phase 5                                                                                     |
-| `AWS_REGION`      | `us-east-1`       | Phase 5                                                                                     |
+| `CORS_ORIGINS`    | _unset_           | Comma-separated allowlist for browser direct-emit. Unset = any (dev only)                   |
+| `S3_LOGS_BUCKET`  | _unset_           | Required when `COLD_STORE=s3`                                                               |
+| `AWS_REGION`      | `us-east-1`       | Bucket region; passed to AWS SDK                                                            |
 | `SEED_ON_BOOT`    | _unset_           | `1` → insert 16 demo events on startup (traces, slow query, rate-limit, panic)              |
 
 ---

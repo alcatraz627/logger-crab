@@ -8,7 +8,7 @@ use log_server::routes;
 use log_server::routes::{mask_database_url, BootInfo};
 use log_server::seed::seed_dummy_events;
 use log_server::store::memory::MemoryHotStore;
-use log_server::store::s3::NoopColdStore;
+use log_server::store::s3::{NoopColdStore, S3ColdStore};
 use log_server::store::sqlite::SqliteHotStore;
 use log_server::store::{ColdStore, HotStore};
 use tokio::net::TcpListener;
@@ -66,9 +66,10 @@ async fn main() -> anyhow::Result<()> {
     let cold: Arc<dyn ColdStore> = match cfg.cold_store.as_str() {
         "noop" => Arc::new(NoopColdStore),
         "s3" => {
-            // TODO Phase 5: real S3ColdStore. For now, degrade gracefully.
-            warn!("COLD_STORE=s3 but S3ColdStore unimplemented — using noop");
-            Arc::new(NoopColdStore)
+            let bucket = cfg.s3_bucket.clone().ok_or_else(|| {
+                anyhow::anyhow!("COLD_STORE=s3 requires S3_LOGS_BUCKET to be set")
+            })?;
+            Arc::new(S3ColdStore::connect(bucket, cfg.aws_region.clone()).await?)
         }
         other => anyhow::bail!("unknown COLD_STORE: {other}"),
     };
