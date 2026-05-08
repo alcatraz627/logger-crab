@@ -27,8 +27,29 @@ async fn main() -> anyhow::Result<()> {
     let cfg = Config::from_env().context("loading config")?;
     info!(?cfg, "starting logger-crab");
 
-    if cfg.ingest_token.is_none() {
-        warn!("INGEST_TOKEN not set — /ingest is unauthenticated (dev only)");
+    // Surface non-fatal config warnings (deprecated vars, malformed token entries).
+    for w in &cfg.warnings {
+        warn!("{w}");
+    }
+
+    if cfg.ingest_tokens.is_empty() {
+        warn!("no ingest tokens configured (INGEST_TOKEN_<NAME>=<tier>:<token>) — /ingest is unauthenticated (dev only)");
+    } else {
+        let full = cfg
+            .ingest_tokens
+            .iter()
+            .filter(|r| matches!(r.tier, log_server::routes::auth::AuthRole::Full))
+            .count();
+        let public = cfg
+            .ingest_tokens
+            .iter()
+            .filter(|r| matches!(r.tier, log_server::routes::auth::AuthRole::Public))
+            .count();
+        let consumers: Vec<&str> = cfg.ingest_tokens.iter().map(|r| r.name.as_str()).collect();
+        info!(full, public, consumers = ?consumers, "ingest auth tokens configured");
+    }
+    if cfg.cors_origins.is_empty() {
+        warn!("CORS_ORIGINS not set — allowing any origin (dev only; tighten for prod)");
     }
     if cfg.dashboard_token.is_none() {
         warn!("DASHBOARD_TOKEN not set — /logs is unauthenticated (dev only)");
@@ -74,7 +95,8 @@ async fn main() -> anyhow::Result<()> {
         port: cfg.port,
         s3_bucket: cfg.s3_bucket.clone(),
         aws_region: cfg.aws_region.clone(),
-        has_ingest_token: cfg.ingest_token.is_some(),
+        has_ingest_token: cfg.ingest_tokens.iter().any(|r| matches!(r.tier, log_server::routes::auth::AuthRole::Full)),
+        has_ingest_token_public: cfg.ingest_tokens.iter().any(|r| matches!(r.tier, log_server::routes::auth::AuthRole::Public)),
         has_dashboard_token: cfg.dashboard_token.is_some(),
         database_url_masked: mask_database_url(&cfg.database_url),
     });

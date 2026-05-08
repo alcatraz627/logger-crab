@@ -24,11 +24,12 @@ pub fn render_nav(active: Active, health_ok: Option<bool>) -> Markup {
             "nav-link"
         }
     };
+    let show_settings = active == Active::Dashboard;
 
     html! {
         nav.lc-nav {
             a.brand href="/" title=(BRAND_NAME) {
-                img.brand-logo src="/assets/versable-logo.svg" alt="Versable" width="22" height="22";
+                img.brand-logo src="/assets/crab-logo.svg" alt="logger-crab" width="22" height="22";
                 span.brand-name { (BRAND_NAME) }
             }
             div.nav-links {
@@ -54,9 +55,18 @@ pub fn render_nav(active: Active, health_ok: Option<bool>) -> Markup {
                     @else { span.dot.err { } "hot down" }
                 }
             }
+            @if show_settings {
+                button.toggle id="settings-open" type="button" title="settings" aria-haspopup="dialog" {
+                    (icon_gear())
+                }
+            }
             button.toggle id="theme-toggle" title="toggle light/dark" { "☾ / ☀" }
         }
     }
+}
+
+pub fn icon_gear() -> Markup {
+    svg_icon(r#"<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>"#)
 }
 
 /// CSS used only by `routes/docs.rs` and `routes/openapi.rs` — the dashboard

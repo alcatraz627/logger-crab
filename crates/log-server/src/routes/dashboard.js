@@ -116,3 +116,24 @@
     });
   });
 })();
+
+// Settings modal — open/close wiring.
+(function () {
+  var dialog = document.getElementById('settings-modal');
+  var openBtn = document.getElementById('settings-open');
+  var closeBtn = document.getElementById('settings-close');
+  if (!dialog) return;
+  if (openBtn) {
+    openBtn.addEventListener('click', function () {
+      if (typeof dialog.showModal === 'function') dialog.showModal();
+      else dialog.setAttribute('open', '');
+    });
+  }
+  if (closeBtn) {
+    closeBtn.addEventListener('click', function () { dialog.close(); });
+  }
+  // Click on backdrop closes (native <dialog> does NOT do this by default).
+  dialog.addEventListener('click', function (e) {
+    if (e.target === dialog) dialog.close();
+  });
+})();

@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 use serde::Deserialize;
 
+use super::auth::{AuthRole, TokenRecord};
 use super::nav::{
     icon_box, icon_branch, icon_check, icon_globe, icon_hash, icon_search, icon_x, render_nav,
     Active, BRAND_NAME, GITHUB_URL,
@@ -56,6 +57,8 @@ pub async fn get_dashboard(
         health.as_ref(),
         cold_health.as_ref(),
         &state.boot,
+        &state.ingest_tokens,
+        &state.config_warnings,
     );
     Ok(Html(markup.into_string()))
 }
@@ -153,6 +156,96 @@ fn fmt_build_time(unix: u64) -> String {
 const CSS: &str = include_str!("dashboard.css");
 const JS: &str = include_str!("dashboard.js");
 
+fn render_settings_modal(consumers: &[TokenRecord], warnings: &[String]) -> Markup {
+    let full_count = consumers.iter().filter(|c| matches!(c.tier, AuthRole::Full)).count();
+    let public_count = consumers.iter().filter(|c| matches!(c.tier, AuthRole::Public)).count();
+
+    html! {
+        dialog id="settings-modal" class="settings-dialog" {
+            div.settings-shell {
+                header.settings-header {
+                    div.settings-title { "Settings" }
+                    button.settings-close type="button" id="settings-close" title="close (Esc)"
+                        aria-label="close settings" { "✕" }
+                }
+
+                section.settings-section {
+                    div.settings-section-head {
+                        h3 { "Registered consumers" }
+                        span.settings-chip {
+                            (consumers.len()) " total · "
+                            span.settings-chip-full { (full_count) " full" }
+                            " · "
+                            span.settings-chip-public { (public_count) " public" }
+                        }
+                    }
+                    @if consumers.is_empty() {
+                        div.settings-empty {
+                            "No consumers configured. Set "
+                            code { "INGEST_TOKEN_<NAME>=<tier>:<token>" }
+                            " env vars to register one."
+                        }
+                    } @else {
+                        table.settings-table {
+                            thead {
+                                tr {
+                                    th { "consumer" }
+                                    th { "tier" }
+                                    th { "source env var" }
+                                }
+                            }
+                            tbody {
+                                @for c in consumers {
+                                    tr {
+                                        td.settings-name { (c.name) }
+                                        td {
+                                            @match c.tier {
+                                                AuthRole::Full => span.settings-tier.tier-full { "full" },
+                                                AuthRole::Public => span.settings-tier.tier-public { "public" },
+                                            }
+                                        }
+                                        td.settings-source { code { (c.source_env_var) } }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                section.settings-section {
+                    div.settings-section-head {
+                        h3 { "Config warnings" }
+                        @if warnings.is_empty() {
+                            span.settings-chip.settings-chip-ok { "● clean" }
+                        } @else {
+                            span.settings-chip.settings-chip-warn {
+                                (warnings.len()) " issue" (if warnings.len() == 1 { "" } else { "s" })
+                            }
+                        }
+                    }
+                    @if warnings.is_empty() {
+                        div.settings-empty.settings-empty-ok {
+                            "All " code { "INGEST_TOKEN_*" } " env vars parsed successfully and no deprecated vars detected."
+                        }
+                    } @else {
+                        ul.settings-warnings {
+                            @for w in warnings {
+                                li { (w) }
+                            }
+                        }
+                    }
+                }
+
+                footer.settings-footer {
+                    span.settings-foot-note {
+                        "Tokens themselves are never displayed. Edit values in your hosting provider's env-var UI; restart logger-crab to apply."
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn render(
     q: &DashboardQuery,
     events: &[LogEvent],
@@ -160,6 +253,8 @@ fn render(
     health: Option<&HotHealth>,
     cold: Option<&ColdHealth>,
     boot: &BootInfo,
+    consumers: &[TokenRecord],
+    config_warnings: &[String],
 ) -> Markup {
     let total = events.len();
     let health_ok = health.map(|h| h.ok).unwrap_or(false);
@@ -375,6 +470,8 @@ fn render(
                 }
 
                 (render_footer(boot, health, cold))
+
+                (render_settings_modal(consumers, config_warnings))
 
                 script { (PreEscaped(JS)) }
             }

@@ -5,17 +5,25 @@ services:
     plan: starter
     dockerfilePath: ./Dockerfile
     envVars:
+      # Render Web Services internally bind to port 10000 — Render overrides
+      # whatever PORT you set here, so the value below mirrors the Render
+      # runtime rather than misleading future readers. Confirmed via the
+      # Render dashboard's Internal Address (logger-crab:10000), 2026-05-08.
       - key: PORT
-        value: "8080"
+        value: "10000"
       - key: DATABASE_URL
         value: sqlite:///var/data/logs.db
       - key: HOT_STORE
         value: sqlite
       - key: COLD_STORE
         value: s3
-      - key: INGEST_TOKEN
-        sync: false
+      # Per-consumer named tokens are managed via the Render UI as
+      # `INGEST_TOKEN_<NAME>=<tier>:<token>` rows (one per consumer).
+      # Listing them here is intentionally avoided so adding/removing a
+      # consumer is a UI-only change, not a render.yaml edit.
       - key: DASHBOARD_TOKEN
+        sync: false
+      - key: CORS_ORIGINS
         sync: false
       - key: AWS_ACCESS_KEY_ID
         sync: false

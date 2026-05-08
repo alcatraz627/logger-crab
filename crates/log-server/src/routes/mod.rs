@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use axum::http::header;
+use axum::http::{header, HeaderName, HeaderValue, Method};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
 use chrono::{DateTime, Utc};
+use tower_http::cors::{Any, CorsLayer};
 
 use crate::config::Config;
 use crate::store::{ColdStore, HotStore};
@@ -30,6 +31,7 @@ pub struct BootInfo {
     pub s3_bucket: Option<String>,
     pub aws_region: String,
     pub has_ingest_token: bool,
+    pub has_ingest_token_public: bool,
     pub has_dashboard_token: bool,
     pub database_url_masked: String,
 }
@@ -44,9 +46,13 @@ impl BootInfo {
 pub struct AppState {
     pub hot: Arc<dyn HotStore>,
     pub cold: Arc<dyn ColdStore>,
-    pub ingest_token: Option<Arc<String>>,
+    /// Named ingest tokens. Source of truth for /ingest auth + attribution.
+    pub ingest_tokens: Arc<Vec<auth::TokenRecord>>,
     pub dashboard_token: Option<Arc<String>>,
     pub boot: Arc<BootInfo>,
+    /// Non-fatal config warnings collected at boot. Surfaced in the
+    /// dashboard settings modal so misconfigured env vars are visible.
+    pub config_warnings: Arc<Vec<String>>,
 }
 
 pub fn router(
@@ -58,9 +64,10 @@ pub fn router(
     let state = AppState {
         hot,
         cold,
-        ingest_token: cfg.ingest_token.as_ref().map(|s| Arc::new(s.clone())),
+        ingest_tokens: Arc::new(cfg.ingest_tokens.clone()),
         dashboard_token: cfg.dashboard_token.as_ref().map(|s| Arc::new(s.clone())),
         boot,
+        config_warnings: Arc::new(cfg.warnings.clone()),
     };
     Router::new()
         .route("/", get(dashboard::get_dashboard))
@@ -72,12 +79,33 @@ pub fn router(
         .route("/docs", get(docs::get_docs))
         .route("/favicon.svg", get(get_favicon))
         .route("/favicon.ico", get(get_favicon))
-        .route("/assets/versable-logo.svg", get(get_favicon))
+        .route("/assets/crab-logo.svg", get(get_favicon))
+        .route("/assets/versable-logo.svg", get(get_versable_logo))
         .route("/assets/versable-wordmark.svg", get(get_wordmark))
         .with_state(state)
+        .layer(build_cors(&cfg.cors_origins))
 }
 
-const FAVICON_SVG: &str = include_str!("../assets/versable-logo.svg");
+fn build_cors(origins: &[String]) -> CorsLayer {
+    let layer = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([
+            HeaderName::from_static("authorization"),
+            HeaderName::from_static("content-type"),
+            HeaderName::from_static("x-request-id"),
+        ]);
+    if origins.is_empty() {
+        // Dev / no allowlist configured — preserve historical permissive behavior.
+        layer.allow_origin(Any)
+    } else {
+        let parsed: Vec<HeaderValue> =
+            origins.iter().filter_map(|o| HeaderValue::from_str(o).ok()).collect();
+        layer.allow_origin(parsed)
+    }
+}
+
+const FAVICON_SVG: &str = include_str!("../assets/crab-logo.svg");
+const VERSABLE_LOGO_SVG: &str = include_str!("../assets/versable-logo.svg");
 const WORDMARK_SVG: &str = include_str!("../assets/versable-wordmark.svg");
 
 async fn get_favicon() -> impl IntoResponse {
@@ -87,6 +115,16 @@ async fn get_favicon() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         FAVICON_SVG,
+    )
+}
+
+async fn get_versable_logo() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "image/svg+xml"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        VERSABLE_LOGO_SVG,
     )
 }
 
