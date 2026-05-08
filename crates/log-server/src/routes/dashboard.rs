@@ -822,10 +822,27 @@ fn render_footer(
                             }
                         }
                     }
-                    @if let Some(err) = &c.last_error {
+                    @if let Some(issue) = &c.last_issue {
                         div.ft-row {
-                            span.ft-k { "error" }
-                            span.ft-v.err title=(err) { (truncate_err(err, 32)) }
+                            span.ft-k { "issue" }
+                            span.ft-v.err
+                                title=(format!("{}: {}", issue.kind, issue.summary)) {
+                                (truncate_err(&issue.kind, 32))
+                            }
+                        }
+                        div.ft-row {
+                            span.ft-k { "" }
+                            span.ft-v title=(issue.summary.as_str()) {
+                                (truncate_err(&issue.summary, 48))
+                            }
+                        }
+                        @if let Some(action) = &issue.action {
+                            div.ft-row {
+                                span.ft-k { "action" }
+                                span.ft-v.warn title=(action) {
+                                    (truncate_err(action, 48))
+                                }
+                            }
                         }
                     }
                 } @else {

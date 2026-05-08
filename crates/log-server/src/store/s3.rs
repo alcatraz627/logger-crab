@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
+use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::primitives::ByteStream;
 use chrono::{DateTime, Duration, Utc};
 use flate2::write::GzEncoder;
@@ -32,7 +33,7 @@ use tokio::sync::Mutex;
 
 use super::{ColdStore, EventStream};
 use crate::error::StorageError;
-use crate::models::{ColdHealth, LogEvent, QueryParams};
+use crate::models::{ColdHealth, LogEvent, QueryParams, S3IssueKind, S3IssueReport};
 
 /// How long a successful health probe is trusted before re-checking S3.
 /// Keeps `/health` cheap when polled frequently.
@@ -65,7 +66,7 @@ impl ColdStore for NoopColdStore {
             backend: "noop".into(),
             bucket: None,
             last_rotation: None,
-            last_error: None,
+            last_issue: None,
             events_archived_total: 0,
             last_health_check: Some(Utc::now()),
         })
@@ -77,7 +78,7 @@ impl ColdStore for NoopColdStore {
 #[derive(Default)]
 struct S3State {
     last_rotation: Option<DateTime<Utc>>,
-    last_error: Option<String>,
+    last_issue: Option<S3IssueReport>,
     events_archived_total: u64,
     last_health_check: Option<DateTime<Utc>>,
     last_health_ok: bool,
@@ -86,6 +87,7 @@ struct S3State {
 pub struct S3ColdStore {
     client: aws_sdk_s3::Client,
     bucket: String,
+    region: String,
     state: Arc<Mutex<S3State>>,
 }
 
@@ -106,18 +108,35 @@ impl S3ColdStore {
         let store = Self {
             client,
             bucket: bucket.clone(),
+            region: region.clone(),
             state: Arc::new(Mutex::new(S3State::default())),
         };
 
-        // Boot probe — best effort.
+        // Boot probe — best effort. Logs the structured issue when it fails
+        // so an operator scanning Render's log feed sees what to fix without
+        // needing to hit /health or open the dashboard.
         match store.probe_bucket().await {
-            Ok(()) => tracing::info!(bucket = %bucket, region = %region, "S3 cold store reachable"),
-            Err(e) => tracing::error!(
+            Ok(()) => tracing::info!(
                 bucket = %bucket,
                 region = %region,
-                error = %e,
-                "S3 cold store unreachable at boot — service will run but archives will fail until resolved"
+                "S3 cold store reachable"
             ),
+            Err(_) => {
+                let s = store.state.lock().await;
+                if let Some(issue) = &s.last_issue {
+                    tracing::error!(
+                        bucket = %bucket,
+                        configured_region = %region,
+                        kind = %issue.kind,
+                        status = ?issue.status,
+                        aws_code = ?issue.aws_code,
+                        aws_request_id = ?issue.aws_request_id,
+                        action = ?issue.action,
+                        "S3 cold store unreachable at boot: {}",
+                        issue.summary
+                    );
+                }
+            }
         }
 
         Ok(store)
@@ -131,17 +150,18 @@ impl S3ColdStore {
                 let mut s = self.state.lock().await;
                 s.last_health_check = Some(now);
                 s.last_health_ok = true;
-                // Don't clear last_error — keep the most recent write error
+                // Don't clear last_issue — keep the most recent write error
                 // visible until the next successful write replaces it.
                 Ok(())
             }
             Err(e) => {
-                let msg = format!("head_bucket failed: {}", display_sdk_err(&e));
+                let issue = classify_sdk_err(&e, &self.region, &self.bucket);
+                let summary = issue.summary.clone();
                 let mut s = self.state.lock().await;
                 s.last_health_check = Some(now);
                 s.last_health_ok = false;
-                s.last_error = Some(msg.clone());
-                Err(StorageError::Unavailable(msg))
+                s.last_issue = Some(issue);
+                Err(StorageError::Unavailable(summary))
             }
         }
     }
@@ -175,21 +195,31 @@ impl ColdStore for S3ColdStore {
             .send()
             .await;
 
-        let mut s = self.state.lock().await;
         match put {
             Ok(_) => {
+                let mut s = self.state.lock().await;
                 s.last_rotation = Some(Utc::now());
                 s.events_archived_total = s
                     .events_archived_total
                     .saturating_add(events.len() as u64);
-                s.last_error = None;
+                s.last_issue = None;
                 Ok(format!("s3://{}/{}", self.bucket, key))
             }
             Err(e) => {
-                let msg = format!("put_object failed: {}", display_sdk_err(&e));
-                s.last_error = Some(msg.clone());
+                let issue = classify_sdk_err(&e, &self.region, &self.bucket);
+                tracing::error!(
+                    bucket = %self.bucket,
+                    kind = %issue.kind,
+                    status = ?issue.status,
+                    aws_code = ?issue.aws_code,
+                    "S3 put_object failed: {}",
+                    issue.summary
+                );
+                let summary = issue.summary.clone();
+                let mut s = self.state.lock().await;
+                s.last_issue = Some(issue);
                 s.last_health_ok = false;
-                Err(StorageError::Unavailable(msg))
+                Err(StorageError::Unavailable(summary))
             }
         }
     }
@@ -227,10 +257,178 @@ impl ColdStore for S3ColdStore {
             backend: "s3".into(),
             bucket: Some(self.bucket.clone()),
             last_rotation: s.last_rotation,
-            last_error: s.last_error.clone(),
+            last_issue: s.last_issue.clone(),
             events_archived_total: s.events_archived_total,
             last_health_check: s.last_health_check,
         })
+    }
+}
+
+// ─── Error classification ────────────────────────────────────────────────
+
+/// Classify an `aws_sdk_s3::error::SdkError` into a structured `S3IssueReport`
+/// that surfaces what's actually wrong + how to fix it.
+///
+/// Generic over the operation error type (`HeadBucketError`, `PutObjectError`,
+/// `GetObjectError`, …) so the same logic applies to every S3 call. The
+/// `R` parameter is the SDK's HTTP response type; we read status + headers
+/// off it via the public `.raw()` accessor on `ServiceError`.
+fn classify_sdk_err<E, R>(
+    err: &SdkError<E, R>,
+    configured_region: &str,
+    bucket: &str,
+) -> S3IssueReport
+where
+    E: std::fmt::Debug + std::fmt::Display + ProvideErrorMetadata,
+    R: ResponseInfo,
+{
+    match err {
+        SdkError::ServiceError(svc) => {
+            let raw = svc.raw();
+            let status = raw.status_u16();
+            let aws_request_id = raw
+                .get_header("x-amz-request-id")
+                .map(|s| s.to_string());
+            let region_header = raw
+                .get_header("x-amz-bucket-region")
+                .map(|s| s.to_string());
+
+            let meta = ProvideErrorMetadata::meta(svc.err());
+            let aws_code = meta.code().map(|s| s.to_string());
+            let aws_msg = meta.message().unwrap_or("").to_string();
+
+            // ── 301: bucket is in a different region ───────────────────────
+            if status == 301 || matches!(region_header.as_deref(), Some(r) if r != configured_region) {
+                if let Some(actual) = region_header {
+                    return S3IssueReport {
+                        kind: S3IssueKind::WrongRegion.as_str().into(),
+                        summary: format!(
+                            "Bucket '{bucket}' is in region '{actual}' but AWS_REGION is '{configured_region}'"
+                        ),
+                        action: Some(format!(
+                            "Set AWS_REGION='{actual}' in your env config and restart"
+                        )),
+                        status: Some(status),
+                        aws_code,
+                        aws_request_id,
+                    };
+                }
+            }
+
+            // ── 403: auth or IAM ───────────────────────────────────────────
+            if status == 403 {
+                let kind = match aws_code.as_deref() {
+                    Some("InvalidAccessKeyId") | Some("SignatureDoesNotMatch") => {
+                        S3IssueKind::AuthFailure
+                    }
+                    _ => S3IssueKind::AccessDenied,
+                };
+                let action = match kind {
+                    S3IssueKind::AuthFailure => Some(
+                        "Verify AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are correct and not deactivated".to_string(),
+                    ),
+                    _ => Some(format!(
+                        "Verify the IAM user attached to AWS_ACCESS_KEY_ID has s3:ListBucket on arn:aws:s3:::{bucket} and s3:PutObject + s3:GetObject on arn:aws:s3:::{bucket}/*"
+                    )),
+                };
+                return S3IssueReport {
+                    kind: kind.as_str().into(),
+                    summary: format!(
+                        "S3 returned 403 Forbidden ({})",
+                        aws_code.as_deref().unwrap_or(if aws_msg.is_empty() { "AccessDenied" } else { aws_msg.as_str() })
+                    ),
+                    action,
+                    status: Some(status),
+                    aws_code,
+                    aws_request_id,
+                };
+            }
+
+            // ── 404: bucket missing ────────────────────────────────────────
+            if status == 404 {
+                return S3IssueReport {
+                    kind: S3IssueKind::BucketNotFound.as_str().into(),
+                    summary: format!(
+                        "Bucket '{bucket}' not found in region '{configured_region}'"
+                    ),
+                    action: Some(format!(
+                        "Verify S3_LOGS_BUCKET name is correct, or create with: aws s3 mb s3://{bucket} --region {configured_region}"
+                    )),
+                    status: Some(status),
+                    aws_code,
+                    aws_request_id,
+                };
+            }
+
+            // ── Other service-level errors ─────────────────────────────────
+            S3IssueReport {
+                kind: S3IssueKind::ServiceError.as_str().into(),
+                summary: if !aws_msg.is_empty() {
+                    format!("S3 returned {status} ({aws_msg})")
+                } else if let Some(code) = &aws_code {
+                    format!("S3 returned {status} ({code})")
+                } else {
+                    format!("S3 returned status {status}")
+                },
+                action: None,
+                status: Some(status),
+                aws_code,
+                aws_request_id,
+            }
+        }
+        SdkError::DispatchFailure(d) => S3IssueReport {
+            kind: S3IssueKind::NetworkFailure.as_str().into(),
+            summary: format!("Network/DNS failure dispatching to S3: {d:?}"),
+            action: Some(
+                "Check outbound network connectivity to *.amazonaws.com and DNS resolution".into(),
+            ),
+            status: None,
+            aws_code: None,
+            aws_request_id: None,
+        },
+        SdkError::TimeoutError(_) => S3IssueReport {
+            kind: S3IssueKind::TimeoutError.as_str().into(),
+            summary: "Request to S3 timed out before response".into(),
+            action: Some("Check network latency or AWS service health".into()),
+            status: None,
+            aws_code: None,
+            aws_request_id: None,
+        },
+        SdkError::ResponseError(_) | SdkError::ConstructionFailure(_) => S3IssueReport {
+            kind: S3IssueKind::SdkInternal.as_str().into(),
+            summary: format!("SDK internal error: {err}"),
+            action: None,
+            status: None,
+            aws_code: None,
+            aws_request_id: None,
+        },
+        _ => S3IssueReport {
+            kind: S3IssueKind::ServiceError.as_str().into(),
+            summary: format!("{err}"),
+            action: None,
+            status: None,
+            aws_code: None,
+            aws_request_id: None,
+        },
+    }
+}
+
+/// Tiny adapter over the SDK's HTTP response type so `classify_sdk_err`
+/// stays generic without depending on aws-smithy-runtime-api directly.
+/// Both `aws_smithy_runtime_api::http::Response` (the SDK's response type)
+/// and `aws_smithy_runtime_api::client::orchestrator::HttpResponse` get a
+/// matching impl below.
+trait ResponseInfo {
+    fn status_u16(&self) -> u16;
+    fn get_header(&self, name: &str) -> Option<&str>;
+}
+
+impl ResponseInfo for aws_smithy_runtime_api::http::Response {
+    fn status_u16(&self) -> u16 {
+        self.status().as_u16()
+    }
+    fn get_header(&self, name: &str) -> Option<&str> {
+        self.headers().get(name)
     }
 }
 
@@ -264,10 +462,31 @@ fn encode_ndjson_gz(events: &[LogEvent]) -> std::io::Result<Vec<u8>> {
 }
 
 /// Format an aws-sdk error into a single line suitable for logs / health.
-fn display_sdk_err<E: std::fmt::Display>(e: &E) -> String {
-    let s = format!("{e}");
-    // Collapse multi-line SDK errors to a single line for log readability.
-    s.lines().collect::<Vec<_>>().join(" | ")
+///
+/// Walks the `std::error::Error::source()` chain so the actual cause (request
+/// IDs, status codes, AWS error codes) reaches the operator instead of being
+/// stuck behind the SDK's terse top-level "service error" message.
+fn display_sdk_err<E: std::fmt::Display + std::error::Error>(e: &E) -> String {
+    let mut parts: Vec<String> = vec![format!("{e}")];
+    let mut src: Option<&dyn std::error::Error> = e.source();
+    let mut depth = 0;
+    while let Some(cause) = src {
+        depth += 1;
+        // Cap depth to avoid runaway logs on pathological chains.
+        if depth > 6 {
+            parts.push("…".into());
+            break;
+        }
+        let line = format!("{cause}");
+        // Skip empty / duplicate-of-parent messages (some SDK chains have
+        // identical Display output at multiple layers).
+        if !line.is_empty() && !parts.iter().any(|p| p == &line) {
+            parts.push(line);
+        }
+        src = cause.source();
+    }
+    // Join with arrows so structure is visible at a glance.
+    parts.join(" → ")
 }
 
 #[cfg(test)]

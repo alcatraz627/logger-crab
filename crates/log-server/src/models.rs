@@ -81,13 +81,80 @@ pub struct ColdHealth {
     /// Most recent successful write to cold tier.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_rotation: Option<DateTime<Utc>>,
-    /// Last error from a write or health probe — cleared on next success.
+    /// Most recent failure, classified into a structured report.
+    /// Cleared on next successful write_batch.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_error: Option<String>,
+    pub last_issue: Option<S3IssueReport>,
     /// Cumulative count of events successfully archived since process start.
     #[serde(default)]
     pub events_archived_total: u64,
     /// Timestamp of the most recent backend reachability check.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_health_check: Option<DateTime<Utc>>,
+}
+
+/// Classified S3 failure with self-service remediation hint.
+///
+/// `kind` is a stable enum-string for filtering/alerting; `summary` is the
+/// one-line human description for logs and the dashboard; `action` (when
+/// present) tells the operator what to fix.
+#[derive(Debug, Clone, Serialize)]
+pub struct S3IssueReport {
+    /// Stable identifier — one of the variants in [`S3IssueKind`]. Stringified
+    /// so it serializes naturally to JSON without serde rename ceremony.
+    pub kind: String,
+    /// Single-line human description for logs / dashboard footer.
+    pub summary: String,
+    /// Operator-facing remediation hint. Absent for failure modes where the
+    /// fix isn't a single config change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    /// HTTP status returned by S3 (when the failure was a service response).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    /// AWS error code — `NoSuchBucket`, `InvalidAccessKeyId`, etc. Often
+    /// absent on HEAD requests where the response body is empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aws_code: Option<String>,
+    /// AWS request ID (`x-amz-request-id`) — useful for AWS support tickets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aws_request_id: Option<String>,
+}
+
+/// Stable identifier for the kind of S3 failure observed. Stringified into
+/// `S3IssueReport.kind` so the JSON shape stays plain; the enum is the
+/// in-process source of truth and what `classify_*` returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum S3IssueKind {
+    /// HTTP 301 — bucket is in a different region than configured.
+    WrongRegion,
+    /// HTTP 404 — bucket doesn't exist (or wrong account).
+    BucketNotFound,
+    /// HTTP 403 with InvalidAccessKeyId / SignatureDoesNotMatch — bad creds.
+    AuthFailure,
+    /// HTTP 403 with AccessDenied — IAM policy missing required action.
+    AccessDenied,
+    /// Network/DNS/connection failure — request never got a response.
+    NetworkFailure,
+    /// Request timed out before response.
+    TimeoutError,
+    /// Other service-level error (unusual status code or unrecognized AWS code).
+    ServiceError,
+    /// SDK-internal error (request construction, response parsing).
+    SdkInternal,
+}
+
+impl S3IssueKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::WrongRegion => "WrongRegion",
+            Self::BucketNotFound => "BucketNotFound",
+            Self::AuthFailure => "AuthFailure",
+            Self::AccessDenied => "AccessDenied",
+            Self::NetworkFailure => "NetworkFailure",
+            Self::TimeoutError => "TimeoutError",
+            Self::ServiceError => "ServiceError",
+            Self::SdkInternal => "SdkInternal",
+        }
+    }
 }

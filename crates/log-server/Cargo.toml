@@ -15,6 +15,10 @@ path = "src/main.rs"
 name = "log_server"
 path = "src/lib.rs"
 
+[[example]]
+name = "check_s3"
+path = "examples/check_s3.rs"
+
 [dependencies]
 notify = { path = "../notify" }
 
@@ -33,6 +37,7 @@ maud.workspace = true
 
 aws-config.workspace = true
 aws-sdk-s3.workspace = true
+aws-smithy-runtime-api.workspace = true
 
 chrono.workspace = true
 

@@ -30,7 +30,11 @@ services:
       - key: AWS_SECRET_ACCESS_KEY
         sync: false
       - key: AWS_REGION
-        value: us-east-1
+        # Must match the bucket's actual region. AWS S3 returns HTTP 301
+        # PermanentRedirect when this differs, with the real region in the
+        # x-amz-bucket-region response header. See `cargo run -p log-server
+        # --example check_s3` to verify.
+        value: ap-southeast-2
       - key: S3_LOGS_BUCKET
         value: versable-logs
       - key: SLACK_WEBHOOK_URL

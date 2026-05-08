@@ -31,6 +31,7 @@ maud = { version = "0.26", features = ["axum"] }
 # AWS
 aws-config = { version = "1.5", features = ["behavior-version-latest"] }
 aws-sdk-s3 = "1.50"
+aws-smithy-runtime-api = "1.11"
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }

@@ -22,7 +22,7 @@
 //!
 //! The task is best-effort: failures are logged at ERROR but don't crash
 //! the service. Operators monitor via `ColdHealth.last_rotation` and
-//! `ColdHealth.last_error` (both surfaced in `/health` and the dashboard
+//! `ColdHealth.last_issue` (both surfaced in `/health` and the dashboard
 //! footer).
 
 use std::collections::HashMap;
@@ -365,7 +365,7 @@ mod tests {
                 backend: "stub".into(),
                 bucket: None,
                 last_rotation: None,
-                last_error: None,
+                last_issue: None,
                 events_archived_total: 0,
                 last_health_check: None,
             })
