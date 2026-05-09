@@ -12,6 +12,9 @@ use crate::store::{ColdStore, HotStore};
 
 pub mod auth;
 pub mod dashboard;
+pub mod dashboard_login;
+pub mod dashboard_modal;
+pub mod dashboard_url;
 pub mod docs;
 pub mod health;
 pub mod ingest;

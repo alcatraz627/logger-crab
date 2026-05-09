@@ -203,6 +203,21 @@ curl -X POST http://localhost:8099/ingest \
 | `HOT_RETENTION_HOURS` | `48` | Events older than this get archived |
 | `SEED_ON_BOOT`    | _unset_           | `1` → insert 16 demo events on startup (traces, slow query, rate-limit, panic)              |
 
+### Cold-tier query
+
+`COLD_STORE=s3` enables both archival writes (rotation cron) and the auto-routed
+read path. When the dashboard's `since` filter is older than the hot tier's
+oldest event, queries auto-route to S3:
+
+| Filter shape                                          | Tier(s) queried       |
+|-------------------------------------------------------|-----------------------|
+| No `since` (or `since` >= hot.oldest_ts)              | hot only              |
+| `since` < hot.oldest_ts AND `until` >= hot.oldest_ts  | **straddle** — cold + hot, merged |
+| `since` < hot.oldest_ts AND `until` < hot.oldest_ts   | cold only             |
+
+Capped at 5000 events per page; cursor pagination works on both tiers. See
+[STORAGE.md](docs/STORAGE.md) for the full design.
+
 ### Diagnostic scripts
 
 Two helpers in `scripts/` for verifying ingest + S3 access from your laptop:

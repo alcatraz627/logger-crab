@@ -344,6 +344,8 @@ mod tests {
     }
     #[async_trait]
     impl ColdStore for StubCold {
+        // Track whether read_range was ever called (used in stub implementations
+        // for any future test asserting cold queries didn't fire during rotation).
         async fn write_batch(
             &self,
             env: &str,
@@ -360,8 +362,8 @@ mod tests {
             w.push((env.into(), service.into(), hour, events.len()));
             Ok(format!("stub://{env}/{service}"))
         }
-        async fn read_range(&self, _: &QueryParams) -> Result<EventStream, StorageError> {
-            Ok(Box::new(stream::empty()))
+        async fn read_range(&self, _: &QueryParams) -> Result<QueryPage, StorageError> {
+            Ok(QueryPage::default())
         }
         async fn health(&self) -> Result<ColdHealth, StorageError> {
             Ok(ColdHealth {

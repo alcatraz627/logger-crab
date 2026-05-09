@@ -1044,6 +1044,30 @@ footer.lc-footer { view-transition-name: lc-footer; }
   background: var(--accent);
 }
 
+/* ─── Cold-tier banner — shown when the dashboard auto-routes to S3 ──── */
+.cold-tier-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: color-mix(in srgb, var(--accent2) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent2) 30%, var(--border));
+  border-radius: var(--chip-radius);
+  margin: 0 24px 8px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.cold-tier-icon {
+  color: var(--accent2);
+  font-size: 16px;
+}
+.cold-tier-msg code {
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
 /* ─── Sticky table header ─────────────────────────────────────────────── */
 table thead tr {
   position: sticky;

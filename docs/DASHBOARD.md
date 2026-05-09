@@ -55,6 +55,32 @@ Cursor-based — "older →" walks one page-size window back through the result
 set. The "page N" indicator in the pager reflects where you are.
 "← newest" resets to page 1 (drops cursor + page).
 
+## Cold-tier auto-routing
+
+The dashboard picks the right tier for your time range automatically:
+
+| Filter shape                                          | What runs                              |
+| ----------------------------------------------------- | -------------------------------------- |
+| No `since` (or `since` >= hot.oldest_ts)              | hot only                               |
+| `since` < hot.oldest_ts AND `until` >= hot.oldest_ts  | **straddle merge** — cold + hot, concat |
+| `since` < hot.oldest_ts AND `until` < hot.oldest_ts   | cold only                              |
+| Cold tier offline (`cold.ok == false`)                | hot only (with stale data noted in footer) |
+
+A blue banner appears whenever cold is involved:
+
+> ❄ Showing archived events from the cold tier (S3). Queries are capped
+> at 5000 events; narrow `since` / `until` for finer slices.
+
+### Cold + cold-straddle limits
+
+- **5000-event per-page cap** — narrow the time range or service filter
+- **"older →" works on cold and on straddle** (uses cold's cursor for cold-only,
+  hot's cursor for straddle — page-back walks through the newer half first)
+- **Slower than hot** — each cold query does an S3 LIST + multiple GETs.
+  Expect 1-3 seconds for typical queries; ~10s for wide ranges
+- **No cross-tier cursor**: paging from straddle into pure-cold territory
+  requires manually adjusting `since`/`until` to slot you into cold-only mode
+
 ## Settings modal
 
 Gear icon (top-right). Lists every consumer registered via

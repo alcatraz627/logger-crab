@@ -253,15 +253,85 @@ If rotation is intentionally disabled (`ROTATION_ENABLED=false` or
 INFO  rotation task NOT spawned cold_store=noop rotation_enabled=true
 ```
 
+## Cold-tier query
+
+Implemented. The dashboard auto-routes to cold when the user picks a `since`
+filter older than the hot tier's oldest event:
+
+```
+if params.since < hot.oldest_ts && cold.backend == "s3" && cold.ok:
+    → state.cold.read_range(&params)
+else:
+    → state.hot.query(&params)
+```
+
+When the cold path fires, the dashboard shows a banner:
+
+> **❄ Showing archived events from the cold tier (S3).** Queries are capped
+> at 5000 events; narrow `since` / `until` for finer slices.
+
+### How `read_range` works
+
+1. Resolve time window — `since` and `until` from `QueryParams`. If `since`
+   is missing, defaults to `until - 30d`. If both are missing, defaults to
+   the last 30 days.
+2. Build narrowest S3 key prefix from filters via `build_s3_prefix`:
+   - `service` + `env` set → `{env}/{service}/`
+   - `env` only → `{env}/`
+   - neither → bucket-wide LIST (slow; warn)
+3. LIST objects under that prefix, paginated via continuation token.
+4. For each key whose hour bucket falls in `[since_floor_hour, until_floor_hour]`:
+   GET, gunzip, parse NDJSON, apply remaining filters in-memory
+   (`request_id`, `user_id`, `session_id`, `min_severity`, `event_prefix`,
+   `fts`).
+5. Sort newest-first, cap at `COLD_QUERY_MAX_EVENTS` (5000), return as stream.
+
+### Pagination + cursor
+
+`read_range` returns a `QueryPage` (the same shape as `HotStore::query`):
+
+```
+QueryPage {
+  events: Vec<LogEvent>,         // sorted newest-first
+  next_cursor: Option<String>,   // RFC3339 ts of the last event, when page is full
+}
+```
+
+The dashboard's "older →" button passes the cursor as `params.cursor`. Cold
+applies it as "ts < cursor", same semantic as hot. Combined with the dashboard's
+`?page=N` URL counter, you get consistent pagination UX across both tiers.
+
+### Hot + cold straddle merge
+
+When the user picks `since` older than `hot.oldest_ts` AND `until` newer than
+it (or absent), the dashboard runs two queries — cold for `[since, hot.oldest_ts)`
+and hot for `[hot.oldest_ts, until]` — and concatenates them. The boundary is
+a point in time and rotation only writes-then-deletes (cold gets the events
+before hot drops them), so naturally there's no overlap to dedup.
+
+The merged page returns hot's `next_cursor` (the newer half's continuation
+cursor). Cold's pagination starts implicitly when the user picks a `since`
+that puts them entirely in cold territory.
+
+### Limits
+
+- **Per-page cap of 5000 events**. The dashboard typically requests 50-500;
+  the cap is the absolute ceiling regardless of `params.limit`. For genuine
+  bulk export, use `/logs/download.ndjson` with a tighter `since`/`until`.
+- **No real-time fan-out**: events still being written to hot won't appear
+  in cold queries until the next rotation cycle archives them.
+- **No straddle pagination**: clicking "older →" on a straddle page uses
+  hot's cursor, which walks back through the hot half. To paginate through
+  the cold half, narrow `since`/`until` to the cold-only range first.
+
 ## What's not implemented (yet)
 
-- **Cold-tier query**: `/logs?since=...` filters that span beyond hot
-  retention. The trait method `read_range` exists but returns an empty
-  stream. Implementing requires LIST-by-prefix + GET + decode + filter, plus
-  pagination through hour buckets.
 - **S3 lifecycle policies**: belong on the S3 bucket itself, configured
   outside this service. Recommended starting point: transition to Standard-IA
   after 30 days, expire after 365.
+- **Cross-tier cursor**: a single cursor that walks seamlessly across the
+  hot/cold boundary. Today the boundary requires changing `since` to
+  continue.
 
 ## Testing
 

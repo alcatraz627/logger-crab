@@ -14,11 +14,12 @@
 //! true backend status (cached for ~30s to avoid hammering S3 on every probe).
 //! Operators monitor /health and the dashboard footer to detect cold-tier outages.
 //!
-//! Read API (`read_range`) is V2 — currently returns an empty stream. Cold-tier
-//! query is a separate, harder problem (LIST + GET + decode + filter); not
-//! implemented in this revision.
+//! Read API (`read_range`) lists S3 keys matching the time range + service/env
+//! filters, fetches each, decompresses NDJSON, applies remaining filters
+//! in-memory, and returns events sorted newest-first. Capped at
+//! `COLD_QUERY_MAX_EVENTS` (5000) so a wide range can't OOM the service.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -28,16 +29,20 @@ use aws_sdk_s3::primitives::ByteStream;
 use chrono::{DateTime, Duration, Utc};
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use futures::stream;
 use tokio::sync::Mutex;
 
-use super::{ColdStore, EventStream};
+use super::ColdStore;
 use crate::error::StorageError;
-use crate::models::{ColdHealth, LogEvent, QueryParams, S3IssueKind, S3IssueReport};
+use crate::models::{ColdHealth, LogEvent, QueryPage, QueryParams, S3IssueKind, S3IssueReport};
 
 /// How long a successful health probe is trusted before re-checking S3.
 /// Keeps `/health` cheap when polled frequently.
 const HEALTH_CACHE_TTL_SECS: i64 = 30;
+
+/// Hard cap on the number of events `read_range` will load into memory in
+/// one call. Prevents a wide time range from OOMing the service. Operators
+/// querying older data should narrow the range or paginate via `since`/`until`.
+const COLD_QUERY_MAX_EVENTS: usize = 5000;
 
 // ─── NoopColdStore ────────────────────────────────────────────────────────
 
@@ -56,8 +61,8 @@ impl ColdStore for NoopColdStore {
         Ok("noop://discarded".into())
     }
 
-    async fn read_range(&self, _params: &QueryParams) -> Result<EventStream, StorageError> {
-        Ok(Box::new(stream::empty()))
+    async fn read_range(&self, _params: &QueryParams) -> Result<QueryPage, StorageError> {
+        Ok(QueryPage::default())
     }
 
     async fn health(&self) -> Result<ColdHealth, StorageError> {
@@ -224,10 +229,108 @@ impl ColdStore for S3ColdStore {
         }
     }
 
-    async fn read_range(&self, _params: &QueryParams) -> Result<EventStream, StorageError> {
-        // Cold-tier query (LIST + GET + decode + filter) is a separate
-        // workstream; for V1 the dashboard reads only from the hot tier.
-        Ok(Box::new(stream::empty()))
+    async fn read_range(&self, params: &QueryParams) -> Result<QueryPage, StorageError> {
+        // Bound the time window. Without `until` we use now; without `since`
+        // we use until - 30d. Prevents accidental bucket-wide scans.
+        let until = params.until.unwrap_or_else(Utc::now);
+        let since = params
+            .since
+            .unwrap_or_else(|| until - chrono::Duration::days(30));
+        if since > until {
+            return Ok(QueryPage::default());
+        }
+
+        // Cursor (RFC3339 ts of previous page's last event) — events with
+        // `ts >= cursor` are skipped, matching hot tier's `ts < cursor` semantic
+        // applied in DESC order.
+        let cursor_ts: Option<DateTime<Utc>> = params
+            .cursor
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .and_then(|s| {
+                DateTime::parse_from_rfc3339(s)
+                    .ok()
+                    .map(|d| d.with_timezone(&Utc))
+            });
+
+        // Per-page limit. Bound by both the user's request and the absolute
+        // cap (5000) so a single page can't OOM us.
+        let page_limit = (params.limit.max(1) as usize).min(COLD_QUERY_MAX_EVENTS);
+
+        // Build the S3 prefix from filter context. More context = narrower
+        // prefix = fewer LIST calls and fewer GETs.
+        let prefix = build_s3_prefix(params.env.as_deref(), params.service.as_deref());
+
+        // Walk the bucket prefix, collecting keys whose hour bucket falls
+        // within [since_floor_hour, until_floor_hour]. Paginate via
+        // continuation_token. Keys come back lexicographically sorted
+        // (= chronologically since the layout is YYYY/MM/DD/HH).
+        let keys = self.list_keys_in_range(&prefix, since, until).await?;
+
+        // Fetch each object in REVERSE order (newest hour first) so the
+        // first events we collect are the newest. Lets us stop early once
+        // the page is full.
+        let mut all_events: Vec<LogEvent> = Vec::new();
+        let mut absolute_cap_hit = false;
+        for key in keys.iter().rev() {
+            if all_events.len() >= page_limit {
+                break;
+            }
+            if all_events.len() >= COLD_QUERY_MAX_EVENTS {
+                absolute_cap_hit = true;
+                break;
+            }
+            match self.fetch_and_parse_object(key).await {
+                Ok(events) => {
+                    for event in events {
+                        if event.ts < since || event.ts > until {
+                            continue;
+                        }
+                        if let Some(cursor) = cursor_ts {
+                            if event.ts >= cursor {
+                                continue;
+                            }
+                        }
+                        if !match_event_filters(&event, params) {
+                            continue;
+                        }
+                        all_events.push(event);
+                        if all_events.len() >= COLD_QUERY_MAX_EVENTS {
+                            absolute_cap_hit = true;
+                            break;
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(key = %key, error = %e, "cold read_range: object skipped");
+                }
+            }
+        }
+
+        if absolute_cap_hit {
+            tracing::warn!(
+                bucket = %self.bucket,
+                cap = COLD_QUERY_MAX_EVENTS,
+                "cold read_range hit max-events cap; truncating"
+            );
+        }
+
+        // Newest first.
+        all_events.sort_by_key(|e| std::cmp::Reverse(e.ts));
+        // Apply page limit AFTER sort (in case fetched events overshot).
+        all_events.truncate(page_limit);
+
+        // Emit a next_cursor when the page is full — there might be more.
+        let next_cursor = if all_events.len() == page_limit && page_limit > 0 {
+            all_events.last().map(|e| e.ts.to_rfc3339())
+        } else {
+            None
+        };
+
+        Ok(QueryPage {
+            events: all_events,
+            next_cursor,
+        })
     }
 
     async fn health(&self) -> Result<ColdHealth, StorageError> {
@@ -432,6 +535,95 @@ impl ResponseInfo for aws_smithy_runtime_api::http::Response {
     }
 }
 
+impl S3ColdStore {
+    /// Lists S3 keys under `prefix` whose hour bucket falls within
+    /// `[since_floor_hour, until]`. Paginates via continuation_token.
+    /// Returns keys sorted chronologically (the same order S3 returns them
+    /// when keyed by hour, since lexicographic == chronological for
+    /// `YYYY/MM/DD/HH` zero-padded strings).
+    async fn list_keys_in_range(
+        &self,
+        prefix: &str,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
+    ) -> Result<Vec<String>, StorageError> {
+        let since_hour = floor_to_hour(since);
+        let until_hour = floor_to_hour(until);
+
+        let mut keys: Vec<String> = Vec::new();
+        let mut continuation: Option<String> = None;
+
+        loop {
+            let mut req = self.client.list_objects_v2().bucket(&self.bucket);
+            if !prefix.is_empty() {
+                req = req.prefix(prefix);
+            }
+            if let Some(t) = &continuation {
+                req = req.continuation_token(t.clone());
+            }
+            let resp = req.send().await.map_err(|e| {
+                StorageError::Unavailable(format!("list_objects: {}", display_one_line(&e)))
+            })?;
+
+            for obj in resp.contents.unwrap_or_default() {
+                if let Some(key) = obj.key {
+                    if let Some(hour) = parse_key_hour(&key) {
+                        if hour >= since_hour && hour <= until_hour {
+                            keys.push(key);
+                        }
+                    }
+                }
+            }
+
+            if resp.is_truncated.unwrap_or(false) {
+                continuation = resp.next_continuation_token;
+                if continuation.is_none() {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        keys.sort();
+        Ok(keys)
+    }
+
+    /// Downloads one S3 object, gunzips it, parses NDJSON, returns events.
+    async fn fetch_and_parse_object(&self, key: &str) -> Result<Vec<LogEvent>, StorageError> {
+        let resp = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| {
+                StorageError::Unavailable(format!("get_object {key}: {}", display_one_line(&e)))
+            })?;
+
+        let bytes = resp
+            .body
+            .collect()
+            .await
+            .map_err(|e| StorageError::Unavailable(format!("collect body {key}: {e}")))?;
+        let bytes = bytes.into_bytes();
+
+        let mut decoder = flate2::read::GzDecoder::new(&bytes[..]);
+        let mut text = String::new();
+        decoder
+            .read_to_string(&mut text)
+            .map_err(StorageError::Io)?;
+
+        let events: Vec<LogEvent> = text
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        Ok(events)
+    }
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
 /// `{env}/{service}/{YYYY}/{MM}/{DD}/{HH}.ndjson.gz`
@@ -445,6 +637,89 @@ fn build_key(env: &str, service: &str, hour: DateTime<Utc>) -> String {
         hour.format("%Y/%m/%d"),
         hour.format("%H")
     )
+}
+
+/// Build the narrowest S3 key prefix from filter context. More specific
+/// = fewer LIST calls. Empty string means "list whole bucket".
+pub(crate) fn build_s3_prefix(env: Option<&str>, service: Option<&str>) -> String {
+    match (env, service) {
+        (Some(e), Some(s)) if !e.is_empty() && !s.is_empty() => format!("{e}/{s}/"),
+        (Some(e), _) if !e.is_empty() => format!("{e}/"),
+        _ => String::new(),
+    }
+}
+
+/// Parse `{env}/{service}/{YYYY}/{MM}/{DD}/{HH}.ndjson.gz` → DateTime of
+/// the hour bucket. Returns None for keys that don't match the layout.
+pub(crate) fn parse_key_hour(key: &str) -> Option<DateTime<Utc>> {
+    // Trim trailing `.ndjson.gz` then split on `/`. Last 4 segments are
+    // the date/hour; everything before is `{env}/{service}/[...nested]`.
+    let stripped = key.strip_suffix(".ndjson.gz")?;
+    let parts: Vec<&str> = stripped.split('/').collect();
+    if parts.len() < 4 {
+        return None;
+    }
+    let n = parts.len();
+    let year: i32 = parts[n - 4].parse().ok()?;
+    let month: u32 = parts[n - 3].parse().ok()?;
+    let day: u32 = parts[n - 2].parse().ok()?;
+    let hour: u32 = parts[n - 1].parse().ok()?;
+    use chrono::TimeZone;
+    chrono::Utc
+        .with_ymd_and_hms(year, month, day, hour, 0, 0)
+        .single()
+}
+
+/// Round a timestamp down to the start of its hour (UTC).
+pub(crate) fn floor_to_hour(ts: DateTime<Utc>) -> DateTime<Utc> {
+    use chrono::{Datelike, TimeZone, Timelike};
+    chrono::Utc
+        .with_ymd_and_hms(ts.year(), ts.month(), ts.day(), ts.hour(), 0, 0)
+        .single()
+        .unwrap_or(ts)
+}
+
+/// Apply the in-memory filter predicates that the store doesn't index on
+/// the S3 side. Mirrors `match_event` in the memory store.
+pub(crate) fn match_event_filters(e: &LogEvent, p: &QueryParams) -> bool {
+    if let Some(rid) = &p.request_id {
+        if e.request_id != *rid { return false; }
+    }
+    if let Some(uid) = &p.user_id {
+        if e.user_id.as_deref() != Some(uid.as_str()) { return false; }
+    }
+    if let Some(sid) = &p.session_id {
+        if e.session_id.as_deref() != Some(sid.as_str()) { return false; }
+    }
+    if let Some(svc) = &p.service {
+        if e.service.as_deref() != Some(svc.as_str()) { return false; }
+    }
+    if let Some(env) = &p.env {
+        if e.env.as_deref() != Some(env.as_str()) { return false; }
+    }
+    if let Some(prefix) = &p.event_prefix {
+        if !e.event.starts_with(prefix) { return false; }
+    }
+    if let Some(min) = p.min_severity {
+        if e.severity_number < min { return false; }
+    }
+    if let Some(fts) = &p.fts {
+        let needle = fts.to_ascii_lowercase();
+        let haystack = format!(
+            "{} {}",
+            e.message.as_deref().unwrap_or(""),
+            e.payload
+        )
+        .to_ascii_lowercase();
+        if !haystack.contains(&needle) { return false; }
+    }
+    true
+}
+
+/// Collapse an SDK error to a single line for log readability.
+fn display_one_line<E: std::fmt::Display>(e: &E) -> String {
+    let s = format!("{e}");
+    s.lines().collect::<Vec<_>>().join(" | ")
 }
 
 /// Encode a slice of events as NDJSON, then gzip. One newline per event;
@@ -530,6 +805,136 @@ mod tests {
         // Empty gzip stream is still a valid 20-ish-byte gzip wrapper.
         assert!(!gz.is_empty(), "even empty input produces gzip header bytes");
     }
+
+    #[test]
+    fn s3_prefix_uses_env_and_service_when_both_present() {
+        assert_eq!(build_s3_prefix(Some("prod"), Some("api")), "prod/api/");
+        assert_eq!(build_s3_prefix(Some("staging"), Some("worker")), "staging/worker/");
+    }
+
+    #[test]
+    fn s3_prefix_falls_back_to_env_when_only_env() {
+        assert_eq!(build_s3_prefix(Some("prod"), None), "prod/");
+    }
+
+    #[test]
+    fn s3_prefix_empty_when_no_filters() {
+        assert_eq!(build_s3_prefix(None, None), "");
+        assert_eq!(build_s3_prefix(Some(""), Some("")), "");
+    }
+
+    #[test]
+    fn s3_prefix_only_service_no_env_returns_empty() {
+        // Without env prefix, can't build a useful narrow prefix.
+        assert_eq!(build_s3_prefix(None, Some("api")), "");
+    }
+
+    #[test]
+    fn parse_key_hour_extracts_correct_timestamp() {
+        let key = "prod/versable-app/2026/05/08/14.ndjson.gz";
+        let parsed = parse_key_hour(key).unwrap();
+        assert_eq!(parsed.format("%Y-%m-%d %H:%M:%S").to_string(), "2026-05-08 14:00:00");
+    }
+
+    #[test]
+    fn parse_key_hour_handles_zero_padding() {
+        let key = "dev/svc/2026/01/03/07.ndjson.gz";
+        let parsed = parse_key_hour(key).unwrap();
+        assert_eq!(parsed.format("%Y-%m-%d %H").to_string(), "2026-01-03 07");
+    }
+
+    #[test]
+    fn parse_key_hour_returns_none_on_garbage() {
+        assert!(parse_key_hour("not-a-key").is_none());
+        assert!(parse_key_hour("missing/extension/2026/05/08/14").is_none());
+        assert!(parse_key_hour("env/svc/abcd/05/08/14.ndjson.gz").is_none());
+    }
+
+    #[test]
+    fn floor_to_hour_drops_minutes_and_seconds() {
+        let ts = chrono::Utc.with_ymd_and_hms(2026, 5, 9, 14, 37, 42).unwrap();
+        let floored = floor_to_hour(ts);
+        assert_eq!(floored.format("%H:%M:%S").to_string(), "14:00:00");
+    }
+
+    #[test]
+    fn match_event_filters_request_id() {
+        let mut e = LogEvent {
+            request_id: "rid-42".into(),
+            event: "x".into(),
+            severity_number: 9,
+            severity_text: "info".into(),
+            ts: Utc::now(),
+            message: None,
+            service: Some("api".into()),
+            env: Some("prod".into()),
+            user_id: None, session_id: None, client_id: None,
+            payload: serde_json::json!({}),
+        };
+        let mut p = QueryParams { request_id: Some("rid-42".into()), ..Default::default() };
+        assert!(match_event_filters(&e, &p));
+        e.request_id = "rid-other".into();
+        assert!(!match_event_filters(&e, &p));
+        // No filter → matches anything
+        p.request_id = None;
+        assert!(match_event_filters(&e, &p));
+    }
+
+    #[test]
+    fn match_event_filters_severity() {
+        let e = LogEvent {
+            request_id: "r".into(),
+            event: "x".into(),
+            severity_number: 13, // warn
+            severity_text: "warn".into(),
+            ts: Utc::now(),
+            message: None,
+            service: None, env: None,
+            user_id: None, session_id: None, client_id: None,
+            payload: serde_json::json!({}),
+        };
+        // warn ≥ info threshold (9) → matches
+        let p = QueryParams { min_severity: Some(9), ..Default::default() };
+        assert!(match_event_filters(&e, &p));
+        // warn < error threshold (17) → doesn't match
+        let p = QueryParams { min_severity: Some(17), ..Default::default() };
+        assert!(!match_event_filters(&e, &p));
+    }
+
+    #[test]
+    fn match_event_filters_fts_searches_message_and_payload() {
+        let e = LogEvent {
+            request_id: "r".into(),
+            event: "x".into(),
+            severity_number: 9,
+            severity_text: "info".into(),
+            ts: Utc::now(),
+            message: Some("Slow query in pipeline".into()),
+            service: None, env: None,
+            user_id: None, session_id: None, client_id: None,
+            payload: serde_json::json!({"job_id": "j_abc"}),
+        };
+        // Substring match in message
+        assert!(match_event_filters(&e, &QueryParams { fts: Some("slow".into()), ..Default::default() }));
+        // Substring match in payload (case-insensitive)
+        assert!(match_event_filters(&e, &QueryParams { fts: Some("J_ABC".into()), ..Default::default() }));
+        // Non-match
+        assert!(!match_event_filters(&e, &QueryParams { fts: Some("nonexistent".into()), ..Default::default() }));
+    }
+
+    #[tokio::test]
+    async fn noop_read_range_returns_empty_page() {
+        let page = NoopColdStore.read_range(&QueryParams::default()).await.unwrap();
+        assert!(page.events.is_empty());
+        assert!(page.next_cursor.is_none());
+    }
+
+    // Note on cold-tier integration tests: actual S3 round-trips require
+    // real AWS credentials and a bucket. The unit-level helpers exhaustively
+    // tested above (build_s3_prefix, parse_key_hour, floor_to_hour,
+    // match_event_filters) cover the deterministic logic. End-to-end is
+    // covered by `cargo run -p log-server --example check_s3` and the
+    // `scripts/smoke-ingest.sh` script after deploy.
 
     #[tokio::test]
     async fn noop_health_reports_noop_backend() {

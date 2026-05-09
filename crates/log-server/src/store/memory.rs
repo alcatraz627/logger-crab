@@ -255,6 +255,67 @@ mod tests {
         let result = store.distinct_values("not_a_field", 100).await.unwrap();
         assert!(result.is_empty());
     }
+
+    #[tokio::test]
+    async fn drain_older_than_removes_only_old_events() {
+        let store = MemoryHotStore::new();
+        let now = Utc::now();
+        let recent = ev("recent", -10, None, None);  // ts = now + 10s
+        let old = ev("old", 86400, None, None);      // ts = now - 1d
+        store.ingest(&[recent.clone(), old.clone()]).await.unwrap();
+
+        let cutoff = now;
+        let _drained = store.drain_older_than(cutoff).await.unwrap();
+        // Only recent should remain.
+        let h = store.health().await.unwrap();
+        assert_eq!(h.rows, 1);
+    }
+
+    #[tokio::test]
+    async fn count_with_no_filters_matches_total() {
+        let store = MemoryHotStore::new();
+        let events: Vec<LogEvent> = (0..7)
+            .map(|i| ev(&format!("r{i}"), i * 10, Some("api"), Some("dev")))
+            .collect();
+        store.ingest(&events).await.unwrap();
+
+        assert_eq!(store.count(&QueryParams::default()).await.unwrap(), 7);
+    }
+
+    #[tokio::test]
+    async fn query_respects_cursor_with_filters() {
+        let store = MemoryHotStore::new();
+        let events: Vec<LogEvent> = vec![
+            ev("e0", 0, Some("api"), None),
+            ev("e1", 60, Some("worker"), None), // filtered out
+            ev("e2", 120, Some("api"), None),
+            ev("e3", 180, Some("api"), None),
+        ];
+        store.ingest(&events).await.unwrap();
+
+        let p1 = store
+            .query(&QueryParams {
+                limit: 1,
+                service: Some("api".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(p1.events.len(), 1);
+        assert_eq!(p1.events[0].request_id, "e0");
+
+        let p2 = store
+            .query(&QueryParams {
+                limit: 1,
+                service: Some("api".into()),
+                cursor: p1.next_cursor.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(p2.events.len(), 1);
+        assert_eq!(p2.events[0].request_id, "e2"); // skips e1 (worker), goes to next api
+    }
 }
 
 fn match_event(e: &LogEvent, p: &QueryParams) -> bool {

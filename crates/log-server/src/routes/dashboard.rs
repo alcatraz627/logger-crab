@@ -1,11 +1,16 @@
 use axum::extract::{Query, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
-use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::http::HeaderMap;
+use axum::response::{Html, IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 use serde::Deserialize;
 
-use super::auth::{AuthRole, TokenRecord};
+use super::auth::TokenRecord;
+use super::dashboard_url::{
+    build_next_url_with_page, download_url, filter_url_override,
+    filter_url_override_u32, filter_url_remove, parse_dashboard_dt,
+    reset_to_first_page,
+};
 use super::nav::{
     icon_box, icon_branch, icon_check, icon_globe, icon_hash, icon_search, icon_x, render_nav,
     svg_icon, Active, BRAND_NAME, GITHUB_URL,
@@ -55,17 +60,17 @@ pub async fn get_dashboard(
     if let Some(token) = q.token.as_deref() {
         if let Some(exp) = expected {
             if token == exp {
-                return Ok(login_redirect_with_cookie(token, &headers));
+                return Ok(super::dashboard_login::login_redirect_with_cookie(token, &headers));
             }
         }
         // Token in query but invalid (or no token configured) → fall through
         // to the login page, which will render with an error notice.
-        return Ok(render_login_page(true).into_response());
+        return Ok(super::dashboard_login::render_login_page(true).into_response());
     }
 
     // No ?token= param — check existing auth (cookie or Bearer).
     if !super::auth::check_dashboard_auth(&headers, expected) {
-        return Ok(render_login_page(false).into_response());
+        return Ok(super::dashboard_login::render_login_page(false).into_response());
     }
 
     let page_size = q.limit.unwrap_or(100).clamp(10, 500);
@@ -83,9 +88,73 @@ pub async fn get_dashboard(
         limit: page_size,
         cursor: not_empty(&q.cursor),
     };
-    let page = state.hot.query(&params).await?;
     let health = state.hot.health().await.ok();
     let cold_health = state.cold.health().await.ok();
+
+    // Cold-tier auto-routing: if the user picked a `since` older than
+    // hot's oldest event, the data they want is in the cold tier. We query
+    // cold instead of hot. Only triggers when a real S3 backend is configured
+    // (cold_health.backend == "s3") to avoid wasted no-op calls.
+    let cold_oldest_ok = cold_health
+        .as_ref()
+        .map(|c| c.backend == "s3" && c.ok)
+        .unwrap_or(false);
+    let hot_oldest = health.as_ref().and_then(|h| h.oldest_ts);
+    let queried_cold = match (params.since, hot_oldest, cold_oldest_ok) {
+        (Some(since), Some(oldest), true) if since < oldest => true,
+        (Some(_), None, true) => true, // hot empty, cold has S3 backend
+        _ => false,
+    };
+
+    // Three modes:
+    //   1. Straddle: `since` is older than hot.oldest_ts AND `until` is newer
+    //      (or absent). Run two queries — cold for [since, hot.oldest), hot
+    //      for [hot.oldest, until] — and concatenate. Naturally dedup-free
+    //      because the boundary is a point in time and rotation only writes
+    //      to cold then deletes from hot (no overlap by design).
+    //   2. Cold-only: `since` is older AND `until` < hot.oldest_ts (or hot
+    //      is genuinely empty). Cold tier is the right answer.
+    //   3. Hot-only: default, what we always did.
+    let queried_straddle = match (params.since, params.until, hot_oldest, cold_oldest_ok) {
+        (Some(since), until, Some(oldest), true) => {
+            since < oldest && until.map(|u| u >= oldest).unwrap_or(true)
+        }
+        _ => false,
+    };
+
+    let (page, queried_cold) = if queried_straddle {
+        let oldest = hot_oldest.expect("guarded by queried_straddle match");
+
+        let mut cold_params = params.clone();
+        cold_params.until = Some(oldest);
+        cold_params.cursor = None; // straddle ignores cursor for V1
+        let cold_page = state.cold.read_range(&cold_params).await?;
+
+        let mut hot_params = params.clone();
+        hot_params.since = Some(oldest);
+        let hot_page = state.hot.query(&hot_params).await?;
+
+        let mut merged = hot_page.events;
+        merged.extend(cold_page.events);
+        merged.sort_by_key(|e| std::cmp::Reverse(e.ts));
+        merged.truncate(params.limit as usize);
+
+        // Surface BOTH next-cursors? Straddle pagination is V2; for now we
+        // return the hot tier's cursor (newer half) since most users will
+        // walk back from there.
+        (
+            crate::models::QueryPage {
+                events: merged,
+                next_cursor: hot_page.next_cursor,
+            },
+            true,
+        )
+    } else if queried_cold {
+        let cold_page = state.cold.read_range(&params).await?;
+        (cold_page, true)
+    } else {
+        (state.hot.query(&params).await?, false)
+    };
 
     // Real filtered count (only when filters are active — without filters
     // it would equal hot.rows, which we already have).
@@ -120,6 +189,7 @@ pub async fn get_dashboard(
         &datalist_services,
         &datalist_envs,
         &datalist_event_prefixes,
+        queried_cold,
     );
     Ok(Html(markup.into_string()).into_response())
 }
@@ -206,95 +276,7 @@ fn fmt_build_time(unix: u64) -> String {
 const CSS: &str = include_str!("dashboard.css");
 const JS: &str = include_str!("dashboard.js");
 
-fn render_settings_modal(consumers: &[TokenRecord], warnings: &[String]) -> Markup {
-    let full_count = consumers.iter().filter(|c| matches!(c.tier, AuthRole::Full)).count();
-    let public_count = consumers.iter().filter(|c| matches!(c.tier, AuthRole::Public)).count();
-
-    html! {
-        dialog id="settings-modal" class="settings-dialog" {
-            div.settings-shell {
-                header.settings-header {
-                    div.settings-title { "Settings" }
-                    button.settings-close type="button" id="settings-close" title="close (Esc)"
-                        aria-label="close settings" { "✕" }
-                }
-
-                section.settings-section {
-                    div.settings-section-head {
-                        h3 { "Registered consumers" }
-                        span.settings-chip {
-                            (consumers.len()) " total · "
-                            span.settings-chip-full { (full_count) " full" }
-                            " · "
-                            span.settings-chip-public { (public_count) " public" }
-                        }
-                    }
-                    @if consumers.is_empty() {
-                        div.settings-empty {
-                            "No consumers configured. Set "
-                            code { "INGEST_TOKEN_<NAME>=<tier>:<token>" }
-                            " env vars to register one."
-                        }
-                    } @else {
-                        table.settings-table {
-                            thead {
-                                tr {
-                                    th { "consumer" }
-                                    th { "tier" }
-                                    th { "source env var" }
-                                }
-                            }
-                            tbody {
-                                @for c in consumers {
-                                    tr {
-                                        td.settings-name { (c.name) }
-                                        td {
-                                            @match c.tier {
-                                                AuthRole::Full => span.settings-tier.tier-full { "full" },
-                                                AuthRole::Public => span.settings-tier.tier-public { "public" },
-                                            }
-                                        }
-                                        td.settings-source { code { (c.source_env_var) } }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                section.settings-section {
-                    div.settings-section-head {
-                        h3 { "Config warnings" }
-                        @if warnings.is_empty() {
-                            span.settings-chip.settings-chip-ok { "● clean" }
-                        } @else {
-                            span.settings-chip.settings-chip-warn {
-                                (warnings.len()) " issue" (if warnings.len() == 1 { "" } else { "s" })
-                            }
-                        }
-                    }
-                    @if warnings.is_empty() {
-                        div.settings-empty.settings-empty-ok {
-                            "All " code { "INGEST_TOKEN_*" } " env vars parsed successfully and no deprecated vars detected."
-                        }
-                    } @else {
-                        ul.settings-warnings {
-                            @for w in warnings {
-                                li { (w) }
-                            }
-                        }
-                    }
-                }
-
-                footer.settings-footer {
-                    span.settings-foot-note {
-                        "Tokens themselves are never displayed. Edit values in your hosting provider's env-var UI; restart logger-crab to apply."
-                    }
-                }
-            }
-        }
-    }
-}
+// render_settings_modal moved to `dashboard_modal.rs`.
 
 #[allow(clippy::too_many_arguments)]
 fn render(
@@ -310,6 +292,7 @@ fn render(
     services: &[String],
     envs: &[String],
     event_prefixes: &[String],
+    queried_cold: bool,
 ) -> Markup {
     let total = events.len();
     let health_ok = health.map(|h| h.ok).unwrap_or(false);
@@ -426,6 +409,17 @@ fn render(
                         }
                         div.grow { }
                         (page_size_selector(q))
+                    }
+                }
+
+                @if queried_cold {
+                    div.cold-tier-banner role="status" {
+                        span.cold-tier-icon { "❄" }
+                        span.cold-tier-msg {
+                            "Showing archived events from the cold tier (S3). "
+                            "Queries are capped at 5000 events; narrow "
+                            code { "since" } " / " code { "until" } " for finer slices."
+                        }
                     }
                 }
 
@@ -640,8 +634,8 @@ fn render(
 
                 (render_footer(boot, health, cold))
 
-                (render_settings_modal(consumers, config_warnings))
-                (render_kbd_toast())
+                (super::dashboard_modal::render_settings_modal(consumers, config_warnings))
+                (super::dashboard_modal::render_kbd_toast())
 
                 // Prism core + JSON grammar — used for in-row payload highlighting.
                 script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" {}
@@ -662,116 +656,17 @@ fn env_class(env: &str) -> &'static str {
 }
 
 #[cfg(test)]
-mod url_tests {
+mod render_tests {
     use super::*;
-
-    fn q_empty() -> DashboardQuery { DashboardQuery::default() }
-
-    fn q_with(svc: Option<&str>, env: Option<&str>, cursor: Option<&str>, page: Option<u32>) -> DashboardQuery {
-        DashboardQuery {
-            service: svc.map(String::from),
-            env: env.map(String::from),
-            cursor: cursor.map(String::from),
-            page,
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn current_pairs_skips_empty_strings() {
-        let q = q_with(Some(""), Some("dev"), None, None);
-        let pairs = current_pairs(&q);
-        // Only env should survive; empty service is dropped.
-        assert_eq!(pairs.len(), 1);
-        assert_eq!(pairs[0], ("env", "dev".into()));
-    }
-
-    #[test]
-    fn current_pairs_preserves_filters_and_page() {
-        let q = q_with(Some("api"), Some("prod"), Some("c1"), Some(3));
-        let pairs = current_pairs(&q);
-        assert!(pairs.contains(&("service", "api".into())));
-        assert!(pairs.contains(&("env", "prod".into())));
-        assert!(pairs.contains(&("page", "3".into())));
-        // Cursor is intentionally NOT in current_pairs — pagination state is
-        // managed separately by build_next_url_with_page / reset_to_first_page.
-        // Including it would mean filter changes accidentally carry the cursor.
-        assert!(!pairs.iter().any(|(k, _)| *k == "cursor"));
-    }
-
-    #[test]
-    fn current_pairs_omits_page_when_one() {
-        let q = q_with(Some("api"), None, None, Some(1));
-        let pairs = current_pairs(&q);
-        assert!(!pairs.iter().any(|(k, _)| *k == "page"), "page=1 should not appear in URL");
-    }
-
-    #[test]
-    fn filter_url_override_replaces_existing_value() {
-        let q = q_with(Some("old-svc"), Some("dev"), None, None);
-        let url = filter_url_override(&q, "service", "new-svc");
-        assert!(url.contains("service=new-svc"));
-        assert!(!url.contains("old-svc"));
-        assert!(url.contains("env=dev"), "env should be preserved");
-    }
-
-    #[test]
-    fn filter_url_remove_drops_just_one_key() {
-        let q = q_with(Some("api"), Some("prod"), Some("c1"), None);
-        let url = filter_url_remove(&q, "cursor");
-        assert!(url.contains("service=api"));
-        assert!(url.contains("env=prod"));
-        assert!(!url.contains("cursor"));
-    }
-
-    #[test]
-    fn reset_to_first_page_drops_cursor_and_page() {
-        let q = q_with(Some("api"), None, Some("c1"), Some(7));
-        let url = reset_to_first_page(&q);
-        assert!(url.contains("service=api"), "filter survives");
-        assert!(!url.contains("cursor"));
-        assert!(!url.contains("page"));
-    }
-
-    #[test]
-    fn build_next_url_with_page_increments() {
-        let q = q_with(Some("api"), None, Some("old-cursor"), Some(2));
-        let url = build_next_url_with_page(&q, "new-cursor");
-        assert!(url.contains("cursor=new-cursor"));
-        assert!(url.contains("page=3"));
-        assert!(!url.contains("old-cursor"));
-        assert!(!url.contains("page=2"));
-    }
-
-    #[test]
-    fn build_next_url_with_page_starts_at_2_from_default() {
-        let q = q_empty();
-        let url = build_next_url_with_page(&q, "c1");
-        assert!(url.contains("page=2"));
-    }
-
-    #[test]
-    fn pairs_to_url_returns_root_when_empty() {
-        assert_eq!(pairs_to_url(&[]), "/");
-    }
-
-    #[test]
-    fn pairs_to_url_urlencodes_values() {
-        let pairs = vec![("q", "hello world".to_string())];
-        let url = pairs_to_url(&pairs);
-        assert!(url.contains("hello%20world"), "spaces should be percent-encoded");
-    }
 
     #[test]
     fn rid_short_returns_full_string() {
-        // Behavior changed: was truncating, now returns full id.
         let id = "abcdefghijklmnop";
         assert_eq!(rid_short(id), id);
     }
 
     #[test]
     fn truncate_chars_respects_unicode() {
-        // Should not split a multi-byte char in half.
         let s = "café-extra";
         let result = truncate_chars(s, 5);
         assert!(result.chars().count() <= 5);
@@ -812,79 +707,10 @@ mod url_tests {
         };
         let preview = render_msg_preview(&e);
         assert!(preview.contains("job_id=abc"));
-        // Underscore-prefixed keys (server-stamped) are excluded.
         assert!(!preview.contains("_internal"));
     }
 
-    #[test]
-    fn parse_dashboard_dt_handles_browser_format() {
-        // Browser datetime-local sends without seconds + without TZ
-        let parsed = parse_dashboard_dt(Some("2026-05-09T03:30")).unwrap();
-        assert_eq!(parsed.format("%Y-%m-%d %H:%M:%S").to_string(), "2026-05-09 03:30:00");
-    }
-
-    #[test]
-    fn parse_dashboard_dt_handles_seconds_form() {
-        let parsed = parse_dashboard_dt(Some("2026-05-09T03:30:45")).unwrap();
-        assert_eq!(parsed.format("%H:%M:%S").to_string(), "03:30:45");
-    }
-
-    #[test]
-    fn parse_dashboard_dt_returns_none_on_garbage() {
-        assert!(parse_dashboard_dt(Some("not a date")).is_none());
-        assert!(parse_dashboard_dt(Some("")).is_none());
-        assert!(parse_dashboard_dt(None).is_none());
-        assert!(parse_dashboard_dt(Some("   ")).is_none());
-    }
-
-    #[test]
-    fn current_pairs_includes_date_range() {
-        let mut q = DashboardQuery::default();
-        q.since = Some("2026-05-01T00:00".into());
-        q.until = Some("2026-05-09T00:00".into());
-        let pairs = current_pairs(&q);
-        assert!(pairs.contains(&("since", "2026-05-01T00:00".into())));
-        assert!(pairs.contains(&("until", "2026-05-09T00:00".into())));
-    }
-
-    #[test]
-    fn render_login_page_contains_login_form() {
-        // Smoke test for the login page maud — just check the response body
-        // includes the form action + the brand. Catches gross structural changes.
-        use axum::body::to_bytes;
-        let resp = render_login_page(false).into_response();
-        let bytes = futures::executor::block_on(to_bytes(resp.into_body(), 65536)).unwrap();
-        let body = std::str::from_utf8(&bytes).unwrap();
-        assert!(body.contains("Versable logger-crab"));
-        assert!(body.contains(r#"action="/""#));
-        assert!(body.contains(r#"name="token""#));
-        assert!(body.contains("Sign in"));
-        // Login page should NOT show the dashboard filters (would mean leaked data)
-        assert!(!body.contains("name=\"service\""));
-        assert!(!body.contains("name=\"env\""));
-    }
-
-    #[test]
-    fn render_login_page_with_invalid_token_shows_error() {
-        use axum::body::to_bytes;
-        let resp = render_login_page(true).into_response();
-        let bytes = futures::executor::block_on(to_bytes(resp.into_body(), 65536)).unwrap();
-        let body = std::str::from_utf8(&bytes).unwrap();
-        assert!(body.contains("Invalid token"));
-    }
-
-    #[test]
-    fn is_https_detects_x_forwarded_proto() {
-        use axum::http::{HeaderMap, HeaderValue};
-        let mut h = HeaderMap::new();
-        assert!(!is_https(&h));
-        h.insert("x-forwarded-proto", HeaderValue::from_static("https"));
-        assert!(is_https(&h));
-        h.insert("x-forwarded-proto", HeaderValue::from_static("HTTPS"));
-        assert!(is_https(&h), "case-insensitive");
-        h.insert("x-forwarded-proto", HeaderValue::from_static("http"));
-        assert!(!is_https(&h));
-    }
+    // render_login_page + is_https tests moved to `dashboard_login.rs`
 }
 
 /// Returns (services, envs, event_prefixes) — served from the AppState
@@ -920,126 +746,7 @@ async fn cached_distinct_values(state: &AppState) -> (Vec<String>, Vec<String>, 
     }
 }
 
-/// "older →" URL: bump the page counter, swap the cursor, drop nothing else.
-/// Replaces the old `build_next_url` helper which didn't track page state.
-#[allow(dead_code)]
-fn build_next_url(q: &DashboardQuery, cursor: &str) -> String {
-    build_next_url_with_page(q, cursor)
-}
-
-fn build_next_url_with_page(q: &DashboardQuery, cursor: &str) -> String {
-    let next_page = q.page.unwrap_or(1) + 1;
-    let mut pairs: Vec<(&'static str, String)> = current_pairs(q)
-        .into_iter()
-        .filter(|(k, _)| *k != "cursor" && *k != "page")
-        .collect();
-    pairs.push(("cursor", cursor.to_string()));
-    pairs.push(("page", next_page.to_string()));
-    pairs_to_url(&pairs)
-}
-
-fn filter_url_override(q: &DashboardQuery, key: &str, value: &str) -> String {
-    let mut pairs: Vec<(&'static str, String)> =
-        current_pairs(q).into_iter().filter(|(k, _)| *k != key).collect();
-    let static_key: &'static str = match key {
-        "request_id" => "request_id",
-        "service" => "service",
-        "env" => "env",
-        "event_prefix" => "event_prefix",
-        "level" => "level",
-        "q" => "q",
-        _ => return pairs_to_url(&pairs),
-    };
-    pairs.push((static_key, value.to_string()));
-    pairs_to_url(&pairs)
-}
-
-fn current_pairs(q: &DashboardQuery) -> Vec<(&'static str, String)> {
-    let mut pairs: Vec<(&'static str, String)> = Vec::new();
-    // Empty strings — produced when the GET form submits with blank inputs —
-    // are dropped here so they don't pollute the URL and the active-filter
-    // chip strip with bogus "key=" entries.
-    let push = |pairs: &mut Vec<(&'static str, String)>, k: &'static str, v: &Option<String>| {
-        if let Some(s) = v {
-            if !s.is_empty() {
-                pairs.push((k, s.clone()));
-            }
-        }
-    };
-    push(&mut pairs, "request_id", &q.request_id);
-    push(&mut pairs, "service", &q.service);
-    push(&mut pairs, "env", &q.env);
-    push(&mut pairs, "event_prefix", &q.event_prefix);
-    push(&mut pairs, "level", &q.level);
-    push(&mut pairs, "q", &q.q);
-    push(&mut pairs, "since", &q.since);
-    push(&mut pairs, "until", &q.until);
-    if let Some(v) = q.limit {
-        pairs.push(("limit", v.to_string()));
-    }
-    // page is meaningful only with cursor; preserved here so the
-    // active-filter strip / download URL keep the right context.
-    if let Some(p) = q.page {
-        if p > 1 {
-            pairs.push(("page", p.to_string()));
-        }
-    }
-    pairs
-}
-
-/// Parse the browser's datetime-local string into a UTC `DateTime`.
-/// Browsers post `2026-05-09T03:30` (no seconds, no offset) — we treat as UTC.
-/// Returns None for empty/missing/malformed input.
-fn parse_dashboard_dt(s: Option<&str>) -> Option<chrono::DateTime<chrono::Utc>> {
-    let s = s?.trim();
-    if s.is_empty() {
-        return None;
-    }
-    // Try with and without seconds.
-    for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"] {
-        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, fmt) {
-            return Some(naive.and_utc());
-        }
-    }
-    None
-}
-
-fn pairs_to_url(pairs: &[(&str, String)]) -> String {
-    if pairs.is_empty() {
-        return "/".to_string();
-    }
-    let query: String =
-        pairs.iter().map(|(k, v)| format!("{k}={}", urlenc(v))).collect::<Vec<_>>().join("&");
-    format!("/?{query}")
-}
-
-fn urlenc(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            _ => out.push_str(&format!("%{:02X}", b)),
-        }
-    }
-    out
-}
-
-fn filter_url_remove(q: &DashboardQuery, key: &str) -> String {
-    let pairs: Vec<(&'static str, String)> =
-        current_pairs(q).into_iter().filter(|(k, _)| *k != key).collect();
-    pairs_to_url(&pairs)
-}
-
-/// "← newest" URL: drop both cursor + page so the user lands on page 1.
-fn reset_to_first_page(q: &DashboardQuery) -> String {
-    let pairs: Vec<(&'static str, String)> = current_pairs(q)
-        .into_iter()
-        .filter(|(k, _)| *k != "cursor" && *k != "page")
-        .collect();
-    pairs_to_url(&pairs)
-}
+// URL builders moved to `dashboard_url.rs`.
 
 fn render_active_filters(q: &DashboardQuery) -> Markup {
     let active: Vec<(&'static str, String, &'static str)> = [
@@ -1246,234 +953,11 @@ fn render_footer(
     }
 }
 
-/// Builds the 302 redirect that lands the user on `/` with the dashboard
-/// cookie set. `Max-Age=2592000` = 30 days; `HttpOnly` blocks JS access;
-/// `SameSite=Strict` blocks cross-site auto-send. `Secure` is added when
-/// the request reached us over HTTPS — Render and most production reverse
-/// proxies set `X-Forwarded-Proto: https`, so we honor that. Local
-/// HTTP-only dev runs without `Secure` so the cookie is still set.
-fn login_redirect_with_cookie(token: &str, headers: &HeaderMap) -> Response {
-    let secure_flag = if is_https(headers) { "; Secure" } else { "" };
-    let cookie = format!(
-        "{}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000{}",
-        super::auth::DASHBOARD_COOKIE,
-        token,
-        secure_flag,
-    );
-    let mut response = Redirect::to("/").into_response();
-    if let Ok(value) = HeaderValue::from_str(&cookie) {
-        response.headers_mut().insert(header::SET_COOKIE, value);
-    }
-    response
-}
+// login_redirect_with_cookie + is_https moved to `dashboard_login.rs`.
 
-/// Detect whether the original request was HTTPS. Trusts `X-Forwarded-Proto`
-/// which Render (and most reverse proxies) set after TLS termination.
-fn is_https(headers: &HeaderMap) -> bool {
-    headers
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.eq_ignore_ascii_case("https"))
-        .unwrap_or(false)
-}
+// render_login_page + LOGIN_CSS + LOGIN_THEME_JS moved to `dashboard_login.rs`.
 
-/// Custom login page — single password input, no username field. Replaces
-/// the browser-native HTTP Basic prompt. Submits via GET to `/?token=...`
-/// which the dashboard handler turns into a cookie + redirect.
-fn render_login_page(token_was_invalid: bool) -> impl IntoResponse {
-    let markup = html! {
-        (DOCTYPE)
-        html {
-            head {
-                meta charset="utf-8";
-                meta name="viewport" content="width=device-width, initial-scale=1";
-                title { (BRAND_NAME) " · login" }
-                link rel="icon" type="image/svg+xml" href="/favicon.svg";
-                link rel="preconnect" href="https://fonts.googleapis.com";
-                link rel="preconnect" href="https://fonts.gstatic.com" crossorigin;
-                link rel="stylesheet"
-                    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap";
-                style { (PreEscaped(LOGIN_CSS)) }
-            }
-            body.login-body {
-                main.login-card {
-                    div.login-brand {
-                        img.login-logo src="/assets/crab-logo.svg" alt="logger-crab" width="48" height="48";
-                        h1.login-title { (BRAND_NAME) }
-                    }
-                    @if token_was_invalid {
-                        div.login-error { "Invalid token. Try again." }
-                    }
-                    form method="get" action="/" {
-                        label for="token" { "Dashboard token" }
-                        input type="password" id="token" name="token"
-                            autocomplete="current-password"
-                            autofocus
-                            placeholder="paste your DASHBOARD_TOKEN value";
-                        button type="submit" { "Sign in" }
-                    }
-                    p.login-hint {
-                        "API consumers can use "
-                        code { "Authorization: Bearer <token>" }
-                        " instead — see "
-                        a href="/docs" { "/docs" } "."
-                    }
-                }
-                script { (PreEscaped(LOGIN_THEME_JS)) }
-            }
-        }
-    };
-    let mut response = (StatusCode::OK, Html(markup.into_string())).into_response();
-    // Status is 200 (not 401) because we're rendering a real page; the
-    // browser will display the form rather than its native error page.
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
-}
-
-const LOGIN_CSS: &str = r#"
-:root {
-  --bg: #0d1117; --surface: #161b22; --surface2: #21262d; --text: #e6edf3;
-  --dim: #7d8590; --muted: #484f58; --border: #30363d;
-  --accent: #58a6ff; --err: #f85149;
-}
-body.light {
-  --bg: #ffffff; --surface: #f6f8fa; --surface2: #eaeef2; --text: #1f2328;
-  --dim: #656d76; --muted: #8c959f; --border: #d0d7de;
-  --accent: #0969da; --err: #cf222e;
-}
-* { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; }
-body.login-body {
-  background: var(--bg);
-  color: var(--text);
-  font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-}
-.login-card {
-  width: 100%;
-  max-width: 380px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 32px;
-  box-shadow: 0 16px 40px rgba(0,0,0,0.35);
-}
-.login-brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 28px;
-}
-.login-logo {
-  display: block;
-  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 30%, transparent));
-}
-.login-title {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-.login-error {
-  background: color-mix(in srgb, var(--err) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--err) 40%, var(--border));
-  color: var(--err);
-  padding: 10px 12px;
-  border-radius: 6px;
-  font-size: 13px;
-  margin-bottom: 16px;
-}
-form { display: flex; flex-direction: column; gap: 8px; }
-label {
-  font-size: 11.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--dim);
-  font-weight: 500;
-}
-input[type="password"] {
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 10px 12px;
-  font-size: 14px;
-  font-family: "JetBrains Mono", ui-monospace, monospace;
-  transition: border-color 0.12s ease, box-shadow 0.12s ease;
-}
-input[type="password"]::placeholder { color: var(--muted); }
-input[type="password"]:hover {
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-}
-input[type="password"]:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent);
-}
-button[type="submit"] {
-  margin-top: 14px;
-  padding: 10px 14px;
-  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border));
-  background: var(--accent);
-  color: white;
-  border-radius: 6px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: filter 0.12s ease, transform 0.12s ease;
-}
-button[type="submit"]:hover { filter: brightness(1.08); }
-button[type="submit"]:active { transform: translateY(1px); }
-.login-hint {
-  margin: 22px 0 0 0;
-  font-size: 12px;
-  color: var(--dim);
-  line-height: 1.5;
-}
-.login-hint code {
-  font-family: "JetBrains Mono", ui-monospace, monospace;
-  font-size: 11px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  padding: 1px 6px;
-  border-radius: 4px;
-  color: var(--text);
-}
-.login-hint a { color: var(--accent); text-decoration: none; }
-.login-hint a:hover { text-decoration: underline; }
-"#;
-
-const LOGIN_THEME_JS: &str = r#"
-(function() {
-  var saved = localStorage.getItem('logger-crab-theme');
-  if (saved === 'light') document.body.classList.add('light');
-})();
-"#;
-
-/// Floating "Press ? for shortcuts" toast triggered by the `?` key.
-/// Hidden by default; gets `.visible` class for ~4.5s when invoked.
-fn render_kbd_toast() -> Markup {
-    html! {
-        div id="kbd-help-toast" class="kbd-toast" role="status" aria-hidden="true" {
-            div.kbd-toast-title { "Keyboard shortcuts" }
-            ul.kbd-toast-list {
-                li { kbd { "j" } " / " kbd { "↓" } span.kbd-desc { "next row" } }
-                li { kbd { "k" } " / " kbd { "↑" } span.kbd-desc { "previous row" } }
-                li { kbd { "Enter" } span.kbd-desc { "expand current row" } }
-                li { kbd { "/" } span.kbd-desc { "focus search" } }
-                li { kbd { "r" } span.kbd-desc { "refresh" } }
-                li { kbd { "Esc" } span.kbd-desc { "blur input / close modal" } }
-                li { kbd { "?" } span.kbd-desc { "this help" } }
-            }
-        }
-    }
-}
+// render_kbd_toast moved to `dashboard_modal.rs`.
 
 fn icon_download() -> Markup {
     svg_icon(
@@ -1487,20 +971,7 @@ fn icon_copy() -> Markup {
     )
 }
 
-/// Build a `/logs/download.ndjson?...` URL preserving the current filter
-/// state so the download contains exactly what the user is looking at.
-fn download_url(q: &DashboardQuery) -> String {
-    let mut pairs = current_pairs(q);
-    // Strip cursor so the download is the FILTERED set from the start, not
-    // a single-page slice. Caller can still page through the dashboard normally.
-    pairs.retain(|(k, _)| *k != "cursor");
-    let qs = pairs_to_url(&pairs);
-    if qs == "/" {
-        "/logs/download.ndjson".to_string()
-    } else {
-        format!("/logs/download.ndjson{}", qs.trim_start_matches('/'))
-    }
-}
+// download_url moved to `dashboard_url.rs`.
 
 /// Returns the full request_id. Used to be truncated to 8 chars + ellipsis,
 /// but the user explicitly asked for the full id rendered (smaller font,
@@ -1631,11 +1102,4 @@ fn page_size_selector(q: &DashboardQuery) -> Markup {
     }
 }
 
-fn filter_url_override_u32(q: &DashboardQuery, key: &str, value: u32) -> String {
-    let mut pairs: Vec<(&'static str, String)> =
-        current_pairs(q).into_iter().filter(|(k, _)| *k != key).collect();
-    if key == "limit" {
-        pairs.push(("limit", value.to_string()));
-    }
-    pairs_to_url(&pairs)
-}
+// filter_url_override_u32 moved to `dashboard_url.rs`.

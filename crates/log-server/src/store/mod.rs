@@ -7,7 +7,9 @@ use chrono::{DateTime, Utc};
 use futures::Stream;
 
 use crate::error::StorageError;
-use crate::models::{ColdHealth, HotHealth, IngestSummary, LogEvent, QueryPage, QueryParams};
+use crate::models::{
+    ColdHealth, HotHealth, IngestSummary, LogEvent, QueryPage, QueryParams,
+};
 
 pub mod memory;
 pub mod s3;
@@ -47,7 +49,10 @@ pub trait ColdStore: Send + Sync {
         events: &[LogEvent],
     ) -> Result<String, StorageError>;
 
-    async fn read_range(&self, params: &QueryParams) -> Result<EventStream, StorageError>;
+    /// Cold-tier read with cursor pagination support. Returns a `QueryPage`
+    /// (matches `HotStore::query`'s shape) so callers can paginate uniformly
+    /// across tiers. Cursor format is RFC3339 timestamp of the last event.
+    async fn read_range(&self, params: &QueryParams) -> Result<QueryPage, StorageError>;
 
     async fn health(&self) -> Result<ColdHealth, StorageError>;
 }
