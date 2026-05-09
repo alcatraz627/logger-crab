@@ -25,6 +25,11 @@ pub fn render_nav(active: Active, health_ok: Option<bool>) -> Markup {
         }
     };
     let show_settings = active == Active::Dashboard;
+    // Refresh only meaningful when there's state to preserve. The nav helper
+    // doesn't see the query, so the dashboard route adds `data-show-refresh`
+    // on body via JS when filters/cursor are present. We render the button
+    // conditionally hidden via CSS instead, which keeps nav.rs context-free.
+    let _ = show_settings; // silence false-positive lint when CSS controls visibility
 
     html! {
         nav.lc-nav {
@@ -152,8 +157,14 @@ nav.lc-nav .nav-links + .toggle { margin-left: auto; }
 
 pub const TOGGLE_JS: &str = r#"
 (function() {
+  // Theme: explicit choice (localStorage) wins; otherwise follow OS pref.
   var saved = localStorage.getItem('logger-crab-theme');
-  if (saved === 'light') document.body.classList.add('light');
+  if (saved === 'light') {
+    document.body.classList.add('light');
+  } else if (!saved && window.matchMedia &&
+             window.matchMedia('(prefers-color-scheme: light)').matches) {
+    document.body.classList.add('light');
+  }
   var btn = document.getElementById('theme-toggle');
   if (!btn) return;
   btn.addEventListener('click', function() {
@@ -161,6 +172,13 @@ pub const TOGGLE_JS: &str = r#"
     localStorage.setItem('logger-crab-theme',
       document.body.classList.contains('light') ? 'light' : 'dark');
   });
+  // Live-update if user changes OS theme and they haven't set an explicit one.
+  if (window.matchMedia) {
+    window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', function(e) {
+      if (localStorage.getItem('logger-crab-theme')) return; // explicit wins
+      document.body.classList.toggle('light', e.matches);
+    });
+  }
 })();
 "#;
 

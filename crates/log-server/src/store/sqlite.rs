@@ -105,45 +105,15 @@ impl HotStore for SqliteHotStore {
              service, env, user_id, session_id, client_id, payload \
              FROM events WHERE 1=1",
         );
-
-        if let Some(rid) = &params.request_id {
-            qb.push(" AND request_id = ").push_bind(rid.clone());
-        }
-        if let Some(uid) = &params.user_id {
-            qb.push(" AND user_id = ").push_bind(uid.clone());
-        }
-        if let Some(sid) = &params.session_id {
-            qb.push(" AND session_id = ").push_bind(sid.clone());
-        }
-        if let Some(svc) = &params.service {
-            qb.push(" AND service = ").push_bind(svc.clone());
-        }
-        if let Some(env) = &params.env {
-            qb.push(" AND env = ").push_bind(env.clone());
-        }
-        if let Some(prefix) = &params.event_prefix {
-            let like = format!("{prefix}%");
-            qb.push(" AND event LIKE ").push_bind(like);
-        }
-        if let Some(min) = params.min_severity {
-            qb.push(" AND severity_number >= ").push_bind(min as i64);
-        }
-        if let Some(since) = params.since {
-            qb.push(" AND ts >= ").push_bind(since.to_rfc3339());
-        }
-        if let Some(until) = params.until {
-            qb.push(" AND ts <= ").push_bind(until.to_rfc3339());
-        }
-        if let Some(q) = &params.fts {
-            let trimmed = q.trim();
-            if !trimmed.is_empty() {
-                let phrase = format!("\"{}\"", trimmed.replace('"', "\"\""));
-                qb.push(" AND id IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ")
-                    .push_bind(phrase)
-                    .push(")");
+        apply_where(&mut qb, params);
+        // Cursor pagination: cursor is the RFC3339 timestamp of the last event
+        // on the previous page. Each click of "older →" walks one page-size
+        // window back through the result set.
+        if let Some(cursor) = &params.cursor {
+            if !cursor.is_empty() {
+                qb.push(" AND ts < ").push_bind(cursor.clone());
             }
         }
-
         qb.push(" ORDER BY ts DESC LIMIT ").push_bind(limit as i64);
 
         let rows = qb.build().fetch_all(&self.pool).await?;
@@ -152,7 +122,71 @@ impl HotStore for SqliteHotStore {
         for row in rows {
             events.push(row_to_event(&row)?);
         }
-        Ok(QueryPage { events, next_cursor: None })
+
+        // Only emit a next-cursor when this page is full; an under-full page
+        // means there are no more events older than the last one.
+        let next_cursor = if events.len() == limit as usize {
+            events.last().map(|e| e.ts.to_rfc3339())
+        } else {
+            None
+        };
+
+        Ok(QueryPage { events, next_cursor })
+    }
+
+    async fn count(&self, params: &QueryParams) -> Result<u64, StorageError> {
+        let mut qb: QueryBuilder<Sqlite> =
+            QueryBuilder::new("SELECT COUNT(*) FROM events WHERE 1=1");
+        apply_where(&mut qb, params);
+        let row = qb.build().fetch_one(&self.pool).await?;
+        let n: i64 = row.try_get(0).unwrap_or(0);
+        Ok(n.max(0) as u64)
+    }
+
+    async fn distinct_values(
+        &self,
+        field: &str,
+        limit: u32,
+    ) -> Result<Vec<String>, StorageError> {
+        // event_prefix is a derived value; everything else is a real column.
+        // Whitelist enforced here so caller-supplied `field` cannot be a
+        // SQL injection vector.
+        let q = match field {
+            "service" => {
+                "SELECT DISTINCT service FROM events \
+                 WHERE service IS NOT NULL AND service <> '' \
+                 ORDER BY service LIMIT ?"
+            }
+            "env" => {
+                "SELECT DISTINCT env FROM events \
+                 WHERE env IS NOT NULL AND env <> '' \
+                 ORDER BY env LIMIT ?"
+            }
+            "event_prefix" => {
+                // Take everything up to and including the first `.`. Events
+                // without a dot return their full name (so `boot` stays `boot`).
+                "SELECT DISTINCT \
+                   CASE \
+                     WHEN INSTR(event, '.') > 0 THEN SUBSTR(event, 1, INSTR(event, '.')) \
+                     ELSE event \
+                   END AS prefix \
+                 FROM events \
+                 WHERE event IS NOT NULL AND event <> '' \
+                 ORDER BY prefix LIMIT ?"
+            }
+            _ => return Ok(Vec::new()),
+        };
+        let rows = sqlx::query(q)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            if let Ok(v) = row.try_get::<String, _>(0) {
+                out.push(v);
+            }
+        }
+        Ok(out)
     }
 
     async fn drain_older_than(&self, before: DateTime<Utc>) -> Result<EventStream, StorageError> {
@@ -186,6 +220,50 @@ impl HotStore for SqliteHotStore {
             .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
             .map(|dt| dt.with_timezone(&Utc));
         Ok(HotHealth { ok: true, rows: rows as u64, oldest_ts })
+    }
+}
+
+/// Pushes WHERE clauses derived from `QueryParams` onto an in-progress
+/// `QueryBuilder`. Caller has already pushed the SELECT prefix and a
+/// `WHERE 1=1` placeholder. Used by both `query()` and `count()` so they
+/// stay in lockstep — adding a filter to one auto-applies to the other.
+fn apply_where<'a>(qb: &mut QueryBuilder<'a, Sqlite>, params: &'a QueryParams) {
+    if let Some(rid) = &params.request_id {
+        qb.push(" AND request_id = ").push_bind(rid.clone());
+    }
+    if let Some(uid) = &params.user_id {
+        qb.push(" AND user_id = ").push_bind(uid.clone());
+    }
+    if let Some(sid) = &params.session_id {
+        qb.push(" AND session_id = ").push_bind(sid.clone());
+    }
+    if let Some(svc) = &params.service {
+        qb.push(" AND service = ").push_bind(svc.clone());
+    }
+    if let Some(env) = &params.env {
+        qb.push(" AND env = ").push_bind(env.clone());
+    }
+    if let Some(prefix) = &params.event_prefix {
+        let like = format!("{prefix}%");
+        qb.push(" AND event LIKE ").push_bind(like);
+    }
+    if let Some(min) = params.min_severity {
+        qb.push(" AND severity_number >= ").push_bind(min as i64);
+    }
+    if let Some(since) = params.since {
+        qb.push(" AND ts >= ").push_bind(since.to_rfc3339());
+    }
+    if let Some(until) = params.until {
+        qb.push(" AND ts <= ").push_bind(until.to_rfc3339());
+    }
+    if let Some(q) = &params.fts {
+        let trimmed = q.trim();
+        if !trimmed.is_empty() {
+            let phrase = format!("\"{}\"", trimmed.replace('"', "\"\""));
+            qb.push(" AND id IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ")
+                .push_bind(phrase)
+                .push(")");
+        }
     }
 }
 

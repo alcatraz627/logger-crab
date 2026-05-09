@@ -193,11 +193,27 @@ curl -X POST http://localhost:8099/ingest \
 | `DATABASE_URL`    | `sqlite::memory:` | SQLite path (`sqlite://./var/dev.db`)                                                       |
 | `COLD_STORE`      | `noop`            | `noop` \| `s3` — `s3` writes hourly NDJSON.gz to `S3_LOGS_BUCKET`; see [STORAGE.md](docs/STORAGE.md) |
 | `INGEST_TOKEN_<NAME>` | _unset_       | Per-consumer bearer, `<tier>:<token>` value (`full` or `public`). Multiple rows allowed; if all unset, `/ingest` is open (dev only) |
-| `DASHBOARD_TOKEN` | _unset_           | Bearer guarding `GET /logs`. Dashboard HTML is always unauth — front with a proxy if public |
+| `DASHBOARD_TOKEN` | _unset_           | Token guarding the dashboard, `/logs` API, and `/health/full`. Browser auth is paste-and-go via `?token=…` (sets a 30-day HttpOnly cookie); curl uses `Authorization: Bearer`. |
 | `CORS_ORIGINS`    | _unset_           | Comma-separated allowlist for browser direct-emit. Unset = any (dev only)                   |
 | `S3_LOGS_BUCKET`  | _unset_           | Required when `COLD_STORE=s3`                                                               |
-| `AWS_REGION`      | `us-east-1`       | Bucket region; passed to AWS SDK                                                            |
+| `AWS_REGION`      | `us-east-1`       | Bucket region; passed to AWS SDK. Mismatch with bucket region surfaces as `WrongRegion` in `/health/full`. |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | _unset_ | Required when `COLD_STORE=s3`. IAM user needs `s3:ListBucket` (bucket) + `s3:PutObject` + `s3:GetObject` (objects). |
+| `ROTATION_ENABLED` | `true` | Hot → cold rotation cron. Auto-disables when `COLD_STORE=noop`. |
+| `ROTATION_INTERVAL_SECS` | `3600` | Seconds between rotation cycles |
+| `HOT_RETENTION_HOURS` | `48` | Events older than this get archived |
 | `SEED_ON_BOOT`    | _unset_           | `1` → insert 16 demo events on startup (traces, slow query, rate-limit, panic)              |
+
+### Diagnostic scripts
+
+Two helpers in `scripts/` for verifying ingest + S3 access from your laptop:
+
+| Script | Verifies | When to run |
+|--------|----------|-------------|
+| `./scripts/smoke-ingest.sh` | `/ingest` end-to-end with both tier tokens, dashboard reachability, server-stamped `_auth_consumer` | After every deploy that touches auth or storage |
+| `./scripts/check-s3.sh` | AWS credentials via the CLI (head-bucket / put / get / delete) | When `cold.ok=false` and you want to localize blame to creds vs Render env |
+| `cargo run -p log-server --example check_s3` | AWS credentials via the **same SDK the runtime uses** — surfaces SDK-specific failures (region redirects, etc.) the CLI auto-corrects | When the CLI passes but logger-crab still says `WrongRegion` / `AuthFailure` |
+
+Both scripts auto-load `.env` from cwd. The Rust example is the authoritative test for "will logger-crab succeed?" — see [docs/STORAGE.md](docs/STORAGE.md) for the failure-mode reference.
 
 ---
 

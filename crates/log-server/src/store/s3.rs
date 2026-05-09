@@ -461,34 +461,6 @@ fn encode_ndjson_gz(events: &[LogEvent]) -> std::io::Result<Vec<u8>> {
     gz.finish()
 }
 
-/// Format an aws-sdk error into a single line suitable for logs / health.
-///
-/// Walks the `std::error::Error::source()` chain so the actual cause (request
-/// IDs, status codes, AWS error codes) reaches the operator instead of being
-/// stuck behind the SDK's terse top-level "service error" message.
-fn display_sdk_err<E: std::fmt::Display + std::error::Error>(e: &E) -> String {
-    let mut parts: Vec<String> = vec![format!("{e}")];
-    let mut src: Option<&dyn std::error::Error> = e.source();
-    let mut depth = 0;
-    while let Some(cause) = src {
-        depth += 1;
-        // Cap depth to avoid runaway logs on pathological chains.
-        if depth > 6 {
-            parts.push("…".into());
-            break;
-        }
-        let line = format!("{cause}");
-        // Skip empty / duplicate-of-parent messages (some SDK chains have
-        // identical Display output at multiple layers).
-        if !line.is_empty() && !parts.iter().any(|p| p == &line) {
-            parts.push(line);
-        }
-        src = cause.source();
-    }
-    // Join with arrows so structure is visible at a glance.
-    parts.join(" → ")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

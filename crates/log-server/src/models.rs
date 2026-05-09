@@ -1,6 +1,7 @@
-//! Wire format for events. Kept minimal at Phase 0 — typed envelope
-//! subgroups (actor/object/state/system/deploy/source/trace) fill in at
-//! Phase 2 before the ingest path lands. See PLAN.md §4.1.
+//! Wire format for events + the `*Health` shapes returned by `/health`.
+//! `LogEvent` is the canonical record stored in the hot tier and archived
+//! to the cold tier as NDJSON. Schema evolution rules: add fields freely,
+//! never rename, never remove without a deprecation window.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

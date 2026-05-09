@@ -211,6 +211,16 @@ every ROTATION_INTERVAL_SECS:
 The first tick fires after `ROTATION_INTERVAL_SECS / 2` to give ingest time to
 settle after boot.
 
+### Cursor pagination race window
+
+Dashboard pagination uses RFC3339 timestamps as cursors (last event's `ts`
+on the previous page). When new events arrive between paging clicks, the
+cursor anchor doesn't change — but new events with timestamps newer than
+the anchor (the common case) won't shift older pages around. The corner case:
+events with backdated timestamps (clock skew, replays) inserted into a window
+the user has already paged past will appear at unexpected positions. Acceptable
+for V1's debug-tool use case; mention if you start backfilling old data.
+
 ### Failure semantics
 
 - **Single group failure → whole cycle aborts.** No partial deletes from hot.

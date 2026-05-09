@@ -1,32 +1,70 @@
+/* ─── Palette ─────────────────────────────────────────────────────────────
+   Warmer + softer than the GitHub default. Less saturation across the
+   hashed chip colors; accent leans slate-indigo rather than pure cyan-blue;
+   error reads as coral, ok reads as sage. Aim: friendly debug surface,
+   not a signal-heavy alarm panel.                                          */
 :root {
-  --bg: #0d1117; --surface: #161b22; --surface2: #21262d; --text: #e6edf3;
-  --dim: #7d8590; --muted: #484f58; --border: #30363d;
-  --accent: #58a6ff; --accent2: #a371f7;
-  --warn: #d29922; --err: #f85149; --ok: #3fb950;
-  --lvl-trace-bg: rgba(125, 133, 144, 0.12); --lvl-trace-fg: #8b949e;
-  --lvl-debug-bg: rgba(121, 192, 255, 0.15); --lvl-debug-fg: #79c0ff;
-  --lvl-info-bg:  rgba(63, 185, 80, 0.15);   --lvl-info-fg:  #3fb950;
-  --lvl-warn-bg:  rgba(210, 153, 34, 0.18);  --lvl-warn-fg:  #f0b849;
-  --lvl-error-bg: rgba(248, 81, 73, 0.18);   --lvl-error-fg: #ff8178;
-  --lvl-fatal-bg: #cf222e; --lvl-fatal-fg: #ffffff;
-  --chip-c0: #58a6ff; --chip-c1: #a371f7; --chip-c2: #3fb950;
-  --chip-c3: #f0b849; --chip-c4: #ff8178; --chip-c5: #79c0ff;
-  --chip-c6: #d2a8ff; --chip-c7: #56d4dd;
-  --ns-c0: #a371f7; --ns-c1: #58a6ff; --ns-c2: #56d4dd;
-  --ns-c3: #d2a8ff; --ns-c4: #7ee787; --ns-c5: #ffa657;
-  --ns-c6: #79c0ff; --ns-c7: #ff8178;
+  --bg: #0f1115; --surface: #161a21; --surface2: #1e242d; --text: #e3e6ea;
+  --dim: #8b919a; --muted: #5c626c; --border: #2a313b;
+  --accent: #8ea4d6; --accent2: #c8a3d8;
+  --warn: #d6a85a; --err: #d97a72; --ok: #7eb778;
+
+  /* Severity backgrounds use a low-saturation tint of the FG color */
+  --lvl-trace-bg: rgba(140, 146, 156, 0.10); --lvl-trace-fg: #8b919a;
+  --lvl-debug-bg: rgba(142, 164, 214, 0.12); --lvl-debug-fg: #8ea4d6;
+  --lvl-info-bg:  rgba(126, 183, 120, 0.12); --lvl-info-fg:  #7eb778;
+  --lvl-warn-bg:  rgba(214, 168, 90, 0.14);  --lvl-warn-fg:  #d6a85a;
+  --lvl-error-bg: rgba(217, 122, 114, 0.14); --lvl-error-fg: #d97a72;
+  --lvl-fatal-bg: #b8453d; --lvl-fatal-fg: #ffffff;
+
+  /* Hashed service / namespace palette — warm earth tones, not jewel tones */
+  --chip-c0: #e8a87c; /* terracotta */
+  --chip-c1: #c8a3d8; /* lavender */
+  --chip-c2: #a3c98a; /* sage */
+  --chip-c3: #e8c47e; /* amber */
+  --chip-c4: #e8a3a8; /* rose */
+  --chip-c5: #8ea4d6; /* slate blue */
+  --chip-c6: #d8a3c8; /* mauve */
+  --chip-c7: #95c8c0; /* teal-grey */
+
+  --ns-c0: #c8a3d8; --ns-c1: #8ea4d6; --ns-c2: #95c8c0;
+  --ns-c3: #d8a3c8; --ns-c4: #a3c98a; --ns-c5: #e8c47e;
+  --ns-c6: #e8a87c; --ns-c7: #e8a3a8;
 }
 body.light {
-  --bg: #ffffff; --surface: #f6f8fa; --surface2: #eaeef2; --text: #1f2328;
-  --dim: #656d76; --muted: #8c959f; --border: #d0d7de;
-  --accent: #0969da; --accent2: #8250df;
-  --warn: #9a6700; --err: #cf222e; --ok: #1a7f37;
-  --lvl-trace-bg: rgba(130, 137, 146, 0.1);  --lvl-trace-fg: #656d76;
-  --lvl-debug-bg: rgba(9, 105, 218, 0.1);    --lvl-debug-fg: #0969da;
-  --lvl-info-bg:  rgba(26, 127, 55, 0.1);    --lvl-info-fg:  #1a7f37;
-  --lvl-warn-bg:  rgba(154, 103, 0, 0.12);   --lvl-warn-fg:  #9a6700;
-  --lvl-error-bg: rgba(207, 34, 46, 0.1);    --lvl-error-fg: #cf222e;
-  --lvl-fatal-bg: #cf222e; --lvl-fatal-fg: #ffffff;
+  --bg: #fbfaf8;            /* warm white, less yellow than #fdfcfa */
+  --surface: #f3f1ed;       /* soft cream, neutralized */
+  --surface2: #e8e4dd;
+  --text: #2a2724;          /* warm dark, not pure black */
+  --dim: #6b6660;
+  --muted: #9d9890;
+  --border: #d6d1c7;
+
+  --accent: #5d6fa3;        /* muted slate-indigo */
+  --accent2: #8a6ba8;       /* muted plum */
+  --warn: #b8862c;          /* warm amber */
+  --err:  #c25c52;          /* coral red */
+  --ok:   #5d8e51;          /* sage */
+
+  --lvl-trace-bg: rgba(130, 124, 116, 0.08); --lvl-trace-fg: #6b6660;
+  --lvl-debug-bg: rgba(93, 111, 163, 0.10);  --lvl-debug-fg: #5d6fa3;
+  --lvl-info-bg:  rgba(93, 142, 81, 0.10);   --lvl-info-fg:  #5d8e51;
+  --lvl-warn-bg:  rgba(184, 134, 44, 0.12);  --lvl-warn-fg:  #b8862c;
+  --lvl-error-bg: rgba(194, 92, 82, 0.10);   --lvl-error-fg: #c25c52;
+  --lvl-fatal-bg: #b8453d; --lvl-fatal-fg: #ffffff;
+
+  --chip-c0: #b8704a;  /* terracotta */
+  --chip-c1: #8a6ba8;  /* plum */
+  --chip-c2: #5d8e51;  /* sage */
+  --chip-c3: #b8862c;  /* amber */
+  --chip-c4: #b56488;  /* dusty rose */
+  --chip-c5: #5d6fa3;  /* slate */
+  --chip-c6: #a07ab5;  /* mauve */
+  --chip-c7: #5d8e8e;  /* teal-grey */
+
+  --ns-c0: #8a6ba8; --ns-c1: #5d6fa3; --ns-c2: #5d8e8e;
+  --ns-c3: #a07ab5; --ns-c4: #5d8e51; --ns-c5: #b8862c;
+  --ns-c6: #b8704a; --ns-c7: #b56488;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
@@ -167,8 +205,8 @@ form.filters {
 }
 .lvl-pill-opt {
   display: inline-flex; align-items: center;
-  padding: 4px 11px; border-radius: 6px; cursor: pointer;
-  font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em;
+  padding: 2px 8px; border-radius: 5px; cursor: pointer;
+  font-size: 9.5px; font-weight: 600; letter-spacing: 0.04em;
   font-family: "JetBrains Mono", monospace;
   text-decoration: none; user-select: none;
   border: 1px solid transparent;
@@ -185,24 +223,36 @@ form.filters {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--text) 30%, transparent);
 }
 
-/* Page-size button group (replaces native select) */
+/* Page-size button group — light, borderless segmented control. Each
+   option stands on its own with hover bg + active bg; no outer container
+   border. Cleaner with the warm palette than the boxed look. */
 .page-size-row {
-  display: inline-flex; gap: 0; padding: 0;
-  border: 1px solid var(--border); border-radius: 7px; overflow: hidden;
-  background: var(--bg);
+  display: inline-flex;
+  gap: 2px;
+  padding: 0;
+  background: transparent;
+  border: 0;
 }
 .page-size-opt {
-  padding: 6px 13px; cursor: pointer;
-  font-size: 12px; font-weight: 600; color: var(--dim);
+  padding: 0 9px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--dim);
   font-family: "JetBrains Mono", monospace;
-  text-decoration: none; user-select: none;
-  border-right: 1px solid var(--border);
+  text-decoration: none;
+  user-select: none;
+  border: 0;
+  border-radius: 4px;
   transition: color 0.12s, background 0.12s;
 }
-.page-size-opt:last-child { border-right: 0; }
-.page-size-opt:hover { color: var(--text); background: var(--surface2); }
+.page-size-opt:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
 .page-size-opt.is-active {
-  color: white; background: var(--accent);
+  color: white;
+  background: var(--accent);
 }
 
 /* Toolbar */
@@ -214,21 +264,41 @@ form.filters {
 .toolbar .count .num { color: var(--text); font-weight: 600; font-family: "JetBrains Mono", monospace; }
 .toolbar .dim { color: var(--dim); }
 .toolbar .grow { flex: 1; }
+/* Pager group — three discrete elements (newest / page-marker / older)
+   with gap between them. No shared container border, no segmented look. */
 .pager-group {
-  display: inline-flex; align-items: center;
-  border: 1px solid var(--border); border-radius: 7px; overflow: hidden;
-  background: var(--surface);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .pager-group .pager {
-  padding: 5px 12px; font-size: 12px; font-weight: 500;
-  text-decoration: none; color: var(--text);
-  transition: color 0.12s, background 0.12s;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
   font-family: "JetBrains Mono", monospace;
-  border: 0; background: transparent;
 }
-.pager-group .pager + .pager { border-left: 1px solid var(--border); }
-.pager-group a.pager:hover { color: var(--accent); background: var(--bg); }
-.pager-group span.pager.disabled { opacity: 0.4; cursor: not-allowed; }
+.pager-group a.pager:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.pager-group span.pager.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: transparent;
+}
+.pager-group .pager-page {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11.5px;
+  color: var(--dim);
+  padding: 0 8px;
+  user-select: none;
+}
 
 .toolbar .hint { color: var(--muted); font-size: 11px; margin-right: 12px; }
 .toolbar .hint kbd {
@@ -416,14 +486,47 @@ td.msg details[open] summary {
   white-space: normal; overflow: visible;
   margin-bottom: 8px; font-weight: 500;
 }
+/* Payload panel — inline, lightweight. No accent stripe, no heavy border;
+   sits flush in the row's flow as continuation content rather than a
+   modal-style callout. Subtle surface tone differentiates it from the row. */
 .payload {
-  background: var(--bg); border: 1px solid var(--border); border-left: 3px solid var(--accent);
-  border-radius: 0 6px 6px 0; padding: 10px 14px; margin-top: 6px;
+  background: color-mix(in srgb, var(--text) 3%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 6px;
+  padding: 10px 14px 12px;
+  margin-top: 8px;
+  position: relative;
 }
 .payload pre {
-  margin: 0; font-size: 11.5px; line-height: 1.5; color: var(--dim);
-  white-space: pre-wrap; word-break: break-all;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: transparent;
 }
+.payload pre code {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: transparent;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  font-size: inherit;
+}
+/* JSON syntax highlighting — Prism tokens scoped to the payload. The same
+   Prism CDN is loaded in dashboard <head> alongside docs. Tokens picked
+   to match the warm palette rather than the default tomorrow theme. */
+.payload .token.property,
+.payload .token.attr-name { color: var(--accent); }       /* keys */
+.payload .token.string,
+.payload .token.attr-value { color: var(--ok); }          /* string values */
+.payload .token.number,
+.payload .token.boolean,
+.payload .token.null { color: var(--warn); }              /* numerics + null */
+.payload .token.punctuation { color: var(--dim); }
+.payload .token.operator { color: var(--dim); }
+.payload .token.comment { color: var(--muted); font-style: italic; }
 .identity { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
 .id-chip {
   background: var(--surface); border: 1px solid var(--border);
@@ -814,6 +917,16 @@ footer.lc-footer { view-transition-name: lc-footer; }
 
 /* ─── Mobile / small-screen layout ────────────────────────────────────── */
 @media (max-width: 720px) {
+  /* Nav: drop the text labels next to icons; keep brand + icon-only links +
+     toggles. Theme toggle, gear, refresh stay visible because they're
+     iconographic. Health chip hides because it's chrome. */
+  nav.lc-nav { padding: 8px 12px; gap: 6px; flex-wrap: nowrap; }
+  nav.lc-nav .nav-link span { display: none; }
+  nav.lc-nav .nav-link { padding: 5px 7px; }
+  nav.lc-nav .health-chip { display: none; }
+  nav.lc-nav .brand-name { display: none; }
+  nav.lc-nav .brand { padding: 4px 6px; }
+
   /* Filter form: stack vertically, full-width inputs */
   form.filters {
     grid-template-columns: 1fr;
@@ -869,9 +982,520 @@ footer.lc-footer { view-transition-name: lc-footer; }
   }
 }
 
-/* Card-view labels — applied via data-label on the relevant TDs.
-   Done in CSS rather than HTML because they're only meaningful at small
-   screens; the desktop layout uses thead. The Maud template adds
-   data-label="<col>" to each td. (If template doesn't yet, the labels are
-   silently absent — graceful.) */
+/* ─── Date range inputs ─────────────────────────────────────────────────── */
+.date-range-group {
+  min-width: 170px;
+}
+.date-range-group input[type="datetime-local"] {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--chip-radius);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  transition: border-color var(--hover-anim-dur) ease;
+  color-scheme: light dark;  /* lets the picker icon match the active theme */
+}
+.date-range-group input[type="datetime-local"]:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* ─── Timezone toggle (UTC / Local) ────────────────────────────────────── */
+.tz-toggle-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: auto;
+}
+.tz-toggle-group label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--dim);
+  font-weight: 600;
+}
+.tz-toggle {
+  display: inline-flex;
+  gap: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--chip-radius);
+  overflow: hidden;
+}
+.tz-toggle-opt {
+  background: transparent;
+  border: 0;
+  padding: 0 12px;
+  height: 32px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dim);
+  cursor: pointer;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: 0.04em;
+  transition: color var(--hover-anim-dur) ease, background var(--hover-anim-dur) ease;
+}
+.tz-toggle-opt:hover { color: var(--text); }
+.tz-toggle-opt.is-active {
+  color: white;
+  background: var(--accent);
+}
+
+/* ─── Sticky table header ─────────────────────────────────────────────── */
+table thead tr {
+  position: sticky;
+  /* JS sets --nav-h to the actual measured nav height on load + resize.
+     Falls back to 44px if JS hasn't run yet (graceful FOUC). */
+  top: var(--nav-h, 44px);
+  background: var(--surface);
+  z-index: 5;
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+
+/* ─── Row hover — pointer cursor + faint slate bg ─────────────────────── */
+tr.evrow {
+  cursor: pointer;
+  transition: background var(--hover-anim-dur) ease;
+}
+tr.evrow:hover {
+  /* Faint slate, neutral so it doesn't fight the warm palette. Uses
+     `slategray` mixed with the page bg for theme-awareness. */
+  background: color-mix(in srgb, slategray 8%, transparent);
+}
+
+/* ─── Severity row tinting — left-border quick-scan markers ──────────── */
+/* Warn (severity 13–16): subtle yellow */
+tr.evrow[data-sev="13"],
+tr.evrow[data-sev="14"],
+tr.evrow[data-sev="15"],
+tr.evrow[data-sev="16"] {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warn) 65%, transparent);
+}
+/* Error (17–20): faint red border, slight bg tint */
+tr.evrow[data-sev="17"],
+tr.evrow[data-sev="18"],
+tr.evrow[data-sev="19"],
+tr.evrow[data-sev="20"] {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--err) 65%, transparent);
+  background: color-mix(in srgb, var(--err) 3%, transparent);
+}
+/* Fatal (21–24): bold red border + stronger tint */
+tr.evrow[data-sev="21"],
+tr.evrow[data-sev="22"],
+tr.evrow[data-sev="23"],
+tr.evrow[data-sev="24"] {
+  box-shadow: inset 4px 0 0 var(--err);
+  background: color-mix(in srgb, var(--err) 7%, transparent);
+}
+/* Combine with row-focused outline cleanly */
+tr.evrow.row-focused[data-sev="17"],
+tr.evrow.row-focused[data-sev="18"],
+tr.evrow.row-focused[data-sev="19"],
+tr.evrow.row-focused[data-sev="20"] {
+  background: color-mix(in srgb, var(--err) 8%, color-mix(in srgb, var(--accent) 6%, transparent));
+}
+
+/* ─── Empty-state CTA ────────────────────────────────────────────────── */
+.empty-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+  padding: 8px 14px;
+  border-radius: var(--chip-radius);
+  background: var(--accent);
+  color: white;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border));
+  text-decoration: none;
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+  transition: filter var(--hover-anim-dur) ease, transform var(--hover-anim-dur) ease;
+}
+.empty-cta:hover { filter: brightness(1.08); }
+.empty-cta:active { transform: translateY(1px); }
+.empty-cta .ic { color: currentColor; opacity: 0.9; }
+
+/* ─── Keyboard shortcut help toast ───────────────────────────────────── */
+.kbd-toast {
+  position: fixed;
+  bottom: 18px;
+  right: 18px;
+  z-index: 200;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 18px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+  font-size: 12.5px;
+  color: var(--text);
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+  transition: opacity 180ms ease, transform 180ms ease;
+  max-width: 280px;
+}
+.kbd-toast.visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.kbd-toast-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+  margin-bottom: 10px;
+}
+.kbd-toast-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kbd-toast-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.kbd-toast-list kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--bg);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--text);
+  min-width: 18px;
+  text-align: center;
+}
+.kbd-toast-list .kbd-desc {
+  margin-left: auto;
+  color: var(--dim);
+  font-size: 11.5px;
+}
+
+/* ─── Active-filter chips polish ─────────────────────────────────────── */
+.active-filters { display: inline-flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.active-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 2px 8px;
+  border-radius: var(--chip-radius);
+  /* Neutral chip: no surface2-mix (which read yellow on the cream light bg).
+     Subtle accent border carries the "active filter" signal instead. */
+  background: var(--bg);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  color: var(--text);
+  font-size: 11.5px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  text-decoration: none;
+  transition: background var(--hover-anim-dur) ease, border-color var(--hover-anim-dur) ease;
+}
+.active-chip:hover {
+  background: color-mix(in srgb, var(--err) 8%, var(--bg));
+  border-color: color-mix(in srgb, var(--err) 50%, var(--border));
+}
+.active-chip .af-key {
+  color: var(--dim);
+  font-weight: 500;
+}
+.active-chip .af-val {
+  color: var(--text);
+  font-weight: 600;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.active-chip .af-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1;
+  transition: background var(--hover-anim-dur) ease, color var(--hover-anim-dur) ease;
+}
+.active-chip:hover .af-x {
+  background: var(--err);
+  color: white;
+}
+
+/* ─── In-row link styles — clean rebuild ──────────────────────────────────
+   All four use a shared "transparent default · same-color hover bg ·
+   underline on hover" pattern. Each variant ONLY sets its own text color;
+   the hover rule reads `currentColor` so it matches whatever the variant set.
+
+   Critically: these rules don't override the standalone `.lvl-pill` /
+   `.chip` styles used elsewhere (filter pill row, settings modal). They
+   only apply to the in-row link variants by class name. */
+
+a.row-svc, a.row-env, a.row-lvl, a.evt-ns-link, a.rid {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-decoration: none;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--chip-font);
+  font-size: 11.5px;
+  font-weight: 500;            /* slightly less bold; was 600 */
+  letter-spacing: -0.005em;
+  line-height: 1.4;
+  transition: background var(--hover-anim-dur) ease;
+}
+a.row-svc:hover, a.row-env:hover, a.row-lvl:hover, a.evt-ns-link:hover, a.rid:hover {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  text-decoration: underline;
+  text-decoration-color: currentColor;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+
+/* Service: text-only with hashed accent color */
+a.row-svc.svc-c0 { color: var(--chip-c0); }
+a.row-svc.svc-c1 { color: var(--chip-c1); }
+a.row-svc.svc-c2 { color: var(--chip-c2); }
+a.row-svc.svc-c3 { color: var(--chip-c3); }
+a.row-svc.svc-c4 { color: var(--chip-c4); }
+a.row-svc.svc-c5 { color: var(--chip-c5); }
+a.row-svc.svc-c6 { color: var(--chip-c6); }
+a.row-svc.svc-c7 { color: var(--chip-c7); }
+
+/* Env: text-only with semantic color */
+a.row-env { font-size: 10.5px; letter-spacing: 0.04em; }
+a.row-env.env-prod    { color: var(--err); }
+a.row-env.env-staging { color: var(--warn); }
+a.row-env.env-dev     { color: var(--accent); }
+a.row-env.env-other   { color: var(--dim); }
+
+/* Severity: text-only, semantic color, weight bumps with severity */
+a.row-lvl { font-size: 10.5px; letter-spacing: 0.04em; }
+a.row-lvl-trace { color: var(--muted); font-weight: 400; }
+a.row-lvl-debug { color: var(--dim);   font-weight: 400; }
+a.row-lvl-info  { color: var(--ok);    font-weight: 500; }
+a.row-lvl-warn  { color: var(--warn);  font-weight: 500; }
+a.row-lvl-error { color: var(--err);   font-weight: 600; }
+a.row-lvl-fatal { color: var(--err);   font-weight: 600; text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
+
+/* Event namespace */
+a.evt-ns-link { font-weight: 500; }
+a.evt-ns-link.ns-c0 { color: var(--ns-c0); }
+a.evt-ns-link.ns-c1 { color: var(--ns-c1); }
+a.evt-ns-link.ns-c2 { color: var(--ns-c2); }
+a.evt-ns-link.ns-c3 { color: var(--ns-c3); }
+a.evt-ns-link.ns-c4 { color: var(--ns-c4); }
+a.evt-ns-link.ns-c5 { color: var(--ns-c5); }
+a.evt-ns-link.ns-c6 { color: var(--ns-c6); }
+
+/* request_id: smaller, monospace, accent text, wraps */
+a.rid {
+  font-size: 10px;
+  font-weight: 400;            /* lighter — was 500 */
+  letter-spacing: -0.01em;
+  color: var(--accent);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  line-height: 1.45;
+  display: inline;
+}
+
+/* request_id cell sizing — pin the column width since `min-width` alone is
+   advisory under `table-layout: auto` and the browser was rendering the
+   column narrower than asked. Both width + min-width = pinned. */
+.rid-cell {
+  width: 200px;
+  min-width: 200px;
+  max-width: 280px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+/* Pin the corresponding header so the column allocation honors it */
+table thead tr th:nth-child(6) {
+  width: 200px;
+  min-width: 200px;
+}
+
+/* "any" pill in the min-level filter — make it no-bg/no-border when not active */
+.lvl-pill-opt.lvl-any {
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  color: var(--dim);
+  transition: color var(--hover-anim-dur) ease, background var(--hover-anim-dur) ease;
+}
+.lvl-pill-opt.lvl-any:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 8%, transparent) !important;
+}
+.lvl-pill-opt.lvl-any[aria-checked="true"] {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 14%, transparent) !important;
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border)) !important;
+}
+
+/* ─── request_id chip with inline copy button ────────────────────────── */
+.rid-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+}
+.rid-copy {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transform: scale(0.92);
+  transition: opacity var(--hover-anim-dur) ease, transform var(--hover-anim-dur) ease, background var(--hover-anim-dur) ease, color var(--hover-anim-dur) ease;
+}
+.rid-cell:hover .rid-copy,
+.rid-copy:focus-visible {
+  opacity: 1;
+  transform: scale(1);
+}
+.rid-copy:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+.rid-copy.copied {
+  background: color-mix(in srgb, var(--ok) 18%, transparent);
+  color: var(--ok);
+  opacity: 1;
+  transform: scale(1);
+}
+.rid-copy .ic { width: 12px; height: 12px; }
+
+/* ─── Payload copy button ─────────────────────────────────────────────── */
+.payload {
+  position: relative;
+}
+.payload-head {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+.payload-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  background: var(--surface2);
+  color: var(--dim);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--hover-anim-dur) ease;
+}
+.payload-copy:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.payload-copy.copied {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+.payload-copy.copied::after {
+  content: " · copied";
+  font-weight: 600;
+}
+.payload-copy .ic { width: 11px; height: 11px; }
+
+/* ─── Keyboard-focused row (j/k navigation) ──────────────────────────── */
+tr.row-focused {
+  outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+/* ─── Standard control sizing ─────────────────────────────────────────────
+   Single source of truth for the height/padding of every toolbar button,
+   form action button, page-size button, and download button. Anything that
+   should sit at the same baseline picks up these custom properties.       */
+:root {
+  --ctl-h: 30px;
+  --ctl-px: 12px;
+  --ctl-radius: 6px;
+  --ctl-font: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --ctl-font-size: 12.5px;
+  --ctl-font-weight: 500;
+}
+
+/* Standard control sizing applies to the action buttons + active chips +
+   pager. The segmented controls (level pills, page-size buttons) keep
+   their own smaller height — they're filter affordances, not actions. */
+.btn-apply,
+.btn-reset,
+.toolbar-download,
+.pager-group .pager,
+.active-chip {
+  height: var(--ctl-h);
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--ctl-font);
+  font-size: var(--ctl-font-size);
+  font-weight: var(--ctl-font-weight);
+  border-radius: var(--ctl-radius);
+  box-sizing: border-box;
+}
+.btn-apply, .btn-reset, .toolbar-download {
+  padding: 0 var(--ctl-px);
+  gap: 6px;
+}
+.btn-apply { box-shadow: none; }     /* override the older drop-shadow that visually changed height */
+.toolbar-download {
+  background: transparent;
+  color: var(--dim);
+  border: 1px solid var(--border);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background var(--hover-anim-dur) ease, color var(--hover-anim-dur) ease, border-color var(--hover-anim-dur) ease;
+}
+.toolbar-download:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+.toolbar-download .ic { color: currentColor; opacity: 0.9; }
+/* Pillrow + page-size — explicit small height; leave padding/typography to
+   the per-element rules above. They're segmented filter controls, not
+   primary actions, so they sit a notch smaller than buttons. */
+.lvl-pill-opt, .page-size-opt {
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+}
+
+/* ─── Refresh button visibility — only when state needs preserving ───── */
+body:not([data-show-refresh="1"]) #refresh-btn { display: none; }
+
+/* Card-view labels — `data-label="<col>"` on each TD is rendered as an
+   inline pseudo-prefix in the mobile media query above. */
 

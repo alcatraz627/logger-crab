@@ -38,13 +38,69 @@ impl HotStore for MemoryHotStore {
         let guard = self.inner.lock().expect("memory store poisoned");
         let limit = if params.limit == 0 { 100 } else { params.limit as usize };
 
-        let mut matched: Vec<LogEvent> =
-            guard.iter().filter(|e| match_event(e, params)).cloned().collect();
+        // Cursor pagination: skip events whose ts >= cursor (matches sqlite's
+        // `WHERE ts < cursor` semantics in DESC order).
+        let cursor_ts: Option<chrono::DateTime<chrono::Utc>> = params
+            .cursor
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .and_then(|s| {
+                chrono::DateTime::parse_from_rfc3339(s)
+                    .ok()
+                    .map(|d| d.with_timezone(&chrono::Utc))
+            });
+
+        let mut matched: Vec<LogEvent> = guard
+            .iter()
+            .filter(|e| match_event(e, params))
+            .filter(|e| match cursor_ts {
+                Some(c) => e.ts < c,
+                None => true,
+            })
+            .cloned()
+            .collect();
 
         matched.sort_by_key(|e| std::cmp::Reverse(e.ts));
         matched.truncate(limit);
 
-        Ok(QueryPage { events: matched, next_cursor: None })
+        let next_cursor = if matched.len() == limit {
+            matched.last().map(|e| e.ts.to_rfc3339())
+        } else {
+            None
+        };
+
+        Ok(QueryPage { events: matched, next_cursor })
+    }
+
+    async fn count(&self, params: &QueryParams) -> Result<u64, StorageError> {
+        let guard = self.inner.lock().expect("memory store poisoned");
+        let n = guard.iter().filter(|e| match_event(e, params)).count();
+        Ok(n as u64)
+    }
+
+    async fn distinct_values(
+        &self,
+        field: &str,
+        limit: u32,
+    ) -> Result<Vec<String>, StorageError> {
+        let guard = self.inner.lock().expect("memory store poisoned");
+        let mut values: Vec<String> = match field {
+            "service" => guard.iter().filter_map(|e| e.service.clone()).collect(),
+            "env" => guard.iter().filter_map(|e| e.env.clone()).collect(),
+            "event_prefix" => guard
+                .iter()
+                .map(|e| match e.event.split_once('.') {
+                    Some((prefix, _)) => format!("{prefix}."),
+                    None => e.event.clone(),
+                })
+                .collect(),
+            _ => return Ok(Vec::new()),
+        };
+        values.retain(|v| !v.is_empty());
+        values.sort();
+        values.dedup();
+        values.truncate(limit as usize);
+        Ok(values)
     }
 
     async fn drain_older_than(&self, before: DateTime<Utc>) -> Result<EventStream, StorageError> {
@@ -58,6 +114,146 @@ impl HotStore for MemoryHotStore {
         let guard = self.inner.lock().expect("memory store poisoned");
         let oldest_ts = guard.iter().map(|e| e.ts).min();
         Ok(HotHealth { ok: true, rows: guard.len() as u64, oldest_ts })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, Utc};
+    use serde_json::json;
+
+    fn ev(rid: &str, ts_offset_secs: i64, svc: Option<&str>, env: Option<&str>) -> LogEvent {
+        LogEvent {
+            request_id: rid.into(),
+            event: "test".into(),
+            severity_number: 9,
+            severity_text: "info".into(),
+            ts: Utc::now() - Duration::seconds(ts_offset_secs),
+            message: None,
+            service: svc.map(String::from),
+            env: env.map(String::from),
+            user_id: None,
+            session_id: None,
+            client_id: None,
+            payload: json!({}),
+        }
+    }
+
+    #[tokio::test]
+    async fn cursor_pagination_walks_pages_in_order() {
+        let store = MemoryHotStore::new();
+        // 5 events, newest to oldest: e0 (now), e1 (-10s), e2 (-20s), e3 (-30s), e4 (-40s)
+        let events: Vec<LogEvent> = (0..5).map(|i| ev(&format!("r{i}"), i * 10, None, None)).collect();
+        store.ingest(&events).await.unwrap();
+
+        // Page 1: page size 2, no cursor — returns r0, r1
+        let p1 = store.query(&QueryParams { limit: 2, ..Default::default() }).await.unwrap();
+        assert_eq!(p1.events.len(), 2);
+        assert_eq!(p1.events[0].request_id, "r0");
+        assert_eq!(p1.events[1].request_id, "r1");
+        assert!(p1.next_cursor.is_some(), "full page should yield a cursor");
+
+        // Page 2: use cursor from page 1 — returns r2, r3
+        let p2 = store.query(&QueryParams {
+            limit: 2,
+            cursor: p1.next_cursor.clone(),
+            ..Default::default()
+        }).await.unwrap();
+        assert_eq!(p2.events.len(), 2);
+        assert_eq!(p2.events[0].request_id, "r2");
+        assert_eq!(p2.events[1].request_id, "r3");
+        assert!(p2.next_cursor.is_some(), "still full page");
+
+        // Page 3: cursor from page 2 — returns r4 only (under-full)
+        let p3 = store.query(&QueryParams {
+            limit: 2,
+            cursor: p2.next_cursor.clone(),
+            ..Default::default()
+        }).await.unwrap();
+        assert_eq!(p3.events.len(), 1);
+        assert_eq!(p3.events[0].request_id, "r4");
+        assert!(p3.next_cursor.is_none(), "under-full page → no more cursor");
+    }
+
+    #[tokio::test]
+    async fn cursor_pagination_respects_filters() {
+        let store = MemoryHotStore::new();
+        let events: Vec<LogEvent> = vec![
+            ev("r0", 0, Some("api"), None),
+            ev("r1", 10, Some("worker"), None),
+            ev("r2", 20, Some("api"), None),
+            ev("r3", 30, Some("worker"), None),
+            ev("r4", 40, Some("api"), None),
+        ];
+        store.ingest(&events).await.unwrap();
+
+        let p1 = store.query(&QueryParams {
+            limit: 2,
+            service: Some("api".into()),
+            ..Default::default()
+        }).await.unwrap();
+        assert_eq!(p1.events.len(), 2);
+        assert!(p1.events.iter().all(|e| e.service.as_deref() == Some("api")));
+
+        let p2 = store.query(&QueryParams {
+            limit: 2,
+            service: Some("api".into()),
+            cursor: p1.next_cursor.clone(),
+            ..Default::default()
+        }).await.unwrap();
+        assert_eq!(p2.events.len(), 1, "only r4 left in api filter");
+        assert_eq!(p2.events[0].request_id, "r4");
+        assert!(p2.next_cursor.is_none());
+    }
+
+    #[tokio::test]
+    async fn count_matches_filter() {
+        let store = MemoryHotStore::new();
+        let events = vec![
+            ev("r0", 0, Some("api"), Some("prod")),
+            ev("r1", 10, Some("api"), Some("dev")),
+            ev("r2", 20, Some("worker"), Some("prod")),
+            ev("r3", 30, Some("api"), Some("prod")),
+        ];
+        store.ingest(&events).await.unwrap();
+
+        assert_eq!(store.count(&QueryParams::default()).await.unwrap(), 4);
+        assert_eq!(
+            store.count(&QueryParams { service: Some("api".into()), ..Default::default() }).await.unwrap(),
+            3
+        );
+        assert_eq!(
+            store.count(&QueryParams {
+                service: Some("api".into()),
+                env: Some("prod".into()),
+                ..Default::default()
+            }).await.unwrap(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn distinct_values_dedupes_and_sorts() {
+        let store = MemoryHotStore::new();
+        let events = vec![
+            ev("r0", 0, Some("worker"), None),
+            ev("r1", 10, Some("api"), None),
+            ev("r2", 20, Some("worker"), None),
+            ev("r3", 30, Some("api"), None),
+            ev("r4", 40, Some("cron"), None),
+        ];
+        store.ingest(&events).await.unwrap();
+
+        let services = store.distinct_values("service", 100).await.unwrap();
+        assert_eq!(services, vec!["api", "cron", "worker"], "sorted + deduped");
+    }
+
+    #[tokio::test]
+    async fn distinct_values_unknown_field_returns_empty() {
+        let store = MemoryHotStore::new();
+        let result = store.distinct_values("not_a_field", 100).await.unwrap();
+        assert!(result.is_empty());
     }
 }
 

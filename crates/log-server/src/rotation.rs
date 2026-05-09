@@ -309,6 +309,10 @@ mod tests {
         async fn ingest(&self, _: &[LogEvent]) -> Result<IngestSummary, StorageError> {
             unimplemented!()
         }
+        async fn count(&self, _: &QueryParams) -> Result<u64, StorageError> { unimplemented!() }
+        async fn distinct_values(&self, _: &str, _: u32) -> Result<Vec<String>, StorageError> {
+            Ok(Vec::new())
+        }
         async fn query(&self, params: &QueryParams) -> Result<QueryPage, StorageError> {
             let g = self.events.lock().unwrap();
             let cutoff = params.until.unwrap_or(Utc::now());

@@ -19,6 +19,20 @@ pub type EventStream = Box<dyn Stream<Item = LogEvent> + Send + Unpin>;
 pub trait HotStore: Send + Sync {
     async fn ingest(&self, events: &[LogEvent]) -> Result<IngestSummary, StorageError>;
     async fn query(&self, params: &QueryParams) -> Result<QueryPage, StorageError>;
+    /// Count of events matching `params` (no limit). Powers the dashboard's
+    /// "X matching · Y in store" counter so a filter shows the real total.
+    async fn count(&self, params: &QueryParams) -> Result<u64, StorageError>;
+    /// Distinct values for a given indexed field across the whole hot store.
+    /// Powers the filter datalists so autocomplete suggests every known
+    /// service/env, not just those on the current page. `field` accepts
+    /// `"service"`, `"env"`, or `"event_prefix"` — anything else returns
+    /// an empty list (no error) so the dashboard renders gracefully if the
+    /// caller misspells.
+    async fn distinct_values(
+        &self,
+        field: &str,
+        limit: u32,
+    ) -> Result<Vec<String>, StorageError>;
     async fn drain_older_than(&self, before: DateTime<Utc>) -> Result<EventStream, StorageError>;
     async fn health(&self) -> Result<HotHealth, StorageError>;
 }

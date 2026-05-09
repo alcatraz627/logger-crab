@@ -53,7 +53,24 @@ pub struct AppState {
     /// Non-fatal config warnings collected at boot. Surfaced in the
     /// dashboard settings modal so misconfigured env vars are visible.
     pub config_warnings: Arc<Vec<String>>,
+    /// 60-second TTL cache of distinct service/env/event-prefix values.
+    /// Eliminates per-render store queries on the dashboard.
+    pub distinct_cache: Arc<tokio::sync::Mutex<DistinctCache>>,
 }
+
+/// Cached distinct values for the filter datalists. Refreshed on demand
+/// when the per-field `last_refresh` is older than 60 seconds.
+#[derive(Default, Clone)]
+pub struct DistinctCache {
+    pub services: Vec<String>,
+    pub envs: Vec<String>,
+    pub event_prefixes: Vec<String>,
+    pub last_refresh: Option<DateTime<Utc>>,
+}
+
+/// Cache TTL — 60s is plenty for filter autocomplete; new services/envs
+/// don't appear in autocomplete for ≤60s after first event, acceptable.
+pub const DISTINCT_CACHE_TTL_SECS: i64 = 60;
 
 pub fn router(
     cfg: &Config,
@@ -68,6 +85,7 @@ pub fn router(
         dashboard_token: cfg.dashboard_token.as_ref().map(|s| Arc::new(s.clone())),
         boot,
         config_warnings: Arc::new(cfg.warnings.clone()),
+        distinct_cache: Arc::new(tokio::sync::Mutex::new(DistinctCache::default())),
     };
     Router::new()
         .route("/", get(dashboard::get_dashboard))
@@ -75,6 +93,7 @@ pub fn router(
         .route("/health/full", get(health::get_health_full))
         .route("/ingest", post(ingest::post_ingest))
         .route("/logs", get(logs::get_logs))
+        .route("/logs/download.ndjson", get(logs::get_logs_download))
         .route("/api", get(openapi::get_swagger_ui))
         .route("/openapi.yaml", get(openapi::get_openapi_yaml))
         .route("/docs", get(docs::get_docs))
