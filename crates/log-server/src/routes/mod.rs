@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use axum::http::{header, HeaderName, HeaderValue, Method};
-use axum::response::IntoResponse;
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use chrono::{DateTime, Utc};
@@ -159,6 +159,27 @@ async fn get_wordmark() -> impl IntoResponse {
         ],
         WORDMARK_SVG,
     )
+}
+
+/// Gate an HTML dashboard route. Returns `Ok(())` if the request carries
+/// valid dashboard auth (cookie or Bearer), or `Err(login_page_response)`
+/// to short-circuit the handler. Use with the `?` operator:
+///
+/// ```ignore
+/// pub async fn get_thing(State(s): State<AppState>, headers: HeaderMap) -> Response {
+///     if let Err(login) = gate_html(&headers, &s) { return login; }
+///     ...
+/// }
+/// ```
+///
+/// When `DASHBOARD_TOKEN` is unset (dev mode), this always returns `Ok(())`.
+pub fn gate_html(headers: &HeaderMap, state: &AppState) -> Result<(), Response> {
+    let expected = state.dashboard_token.as_deref().map(|s| s.as_str());
+    if auth::check_dashboard_auth(headers, expected) {
+        Ok(())
+    } else {
+        Err(dashboard_login::render_login_page(false).into_response())
+    }
 }
 
 /// Mask a DATABASE_URL for display: strips userinfo in `scheme://user:pass@host`,

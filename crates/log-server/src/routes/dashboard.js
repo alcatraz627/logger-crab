@@ -13,6 +13,41 @@
     });
   }
 
+  // Prefetch-on-hover. For same-origin GET links (filter chips, level
+  // pills, page-size, pager, request_id), inject <link rel="prefetch">
+  // when the user's cursor lingers 80ms. Dedupes per URL per page-load
+  // so re-hovers don't re-fire. Idempotent GETs only — every chip on the
+  // dashboard mutates the URL by toggling/adding query params, never POSTs.
+  var prefetched = Object.create(null);
+  var hoverTimer = null;
+  function shouldPrefetch(a) {
+    if (!a || !a.href) return false;
+    if (a.target && a.target !== "" && a.target !== "_self") return false;
+    if (a.hasAttribute("download")) return false;
+    if (a.dataset && a.dataset.noPrefetch === "true") return false;
+    if (a.origin !== window.location.origin) return false;
+    if (a.href === window.location.href) return false;
+    return true;
+  }
+  function prefetch(url) {
+    if (prefetched[url]) return;
+    prefetched[url] = true;
+    var link = document.createElement("link");
+    link.rel = "prefetch";
+    link.href = url;
+    link.as = "document";
+    document.head.appendChild(link);
+  }
+  document.addEventListener("mouseover", function (ev) {
+    var a = ev.target && ev.target.closest && ev.target.closest("a[href]");
+    if (!shouldPrefetch(a)) return;
+    if (hoverTimer) clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(function () { prefetch(a.href); }, 80);
+  });
+  document.addEventListener("mouseout", function () {
+    if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
+  });
+
   // Client-side column sort
   var table = document.getElementById("events-table");
   if (!table) return;

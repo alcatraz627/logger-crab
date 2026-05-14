@@ -1,16 +1,37 @@
-use axum::http::{header, StatusCode};
-use axum::response::{Html, IntoResponse};
+use axum::extract::State;
+use axum::http::{header, HeaderMap, StatusCode};
+use axum::response::{Html, IntoResponse, Response};
 use maud::{html, PreEscaped, DOCTYPE};
 
 use super::nav::{render_nav, Active, BRAND_NAME, NAV_CSS, TOGGLE_JS};
+use super::AppState;
+use crate::error::AppError;
 
 pub const OPENAPI_YAML: &str = include_str!("../../openapi.yaml");
 
-pub async fn get_openapi_yaml() -> impl IntoResponse {
-    (StatusCode::OK, [(header::CONTENT_TYPE, "application/yaml; charset=utf-8")], OPENAPI_YAML)
+pub async fn get_openapi_yaml(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    super::auth::require_dashboard_auth(
+        &headers,
+        state.dashboard_token.as_deref().map(|s| s.as_str()),
+    )?;
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/yaml; charset=utf-8")],
+        OPENAPI_YAML,
+    )
+        .into_response())
 }
 
-pub async fn get_swagger_ui() -> Html<String> {
+pub async fn get_swagger_ui(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(login) = super::gate_html(&headers, &state) {
+        return login;
+    }
     let markup = html! {
         (DOCTYPE)
         html lang="en" {
@@ -37,7 +58,7 @@ pub async fn get_swagger_ui() -> Html<String> {
             }
         }
     };
-    Html(markup.into_string())
+    Html(markup.into_string()).into_response()
 }
 
 const SWAGGER_CSS: &str = r#"

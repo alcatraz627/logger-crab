@@ -1,13 +1,17 @@
 use axum::extract::State;
-use axum::response::Html;
+use axum::http::HeaderMap;
+use axum::response::{Html, IntoResponse, Response};
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 
 use super::nav::{render_nav, Active, BRAND_NAME, NAV_CSS, TOGGLE_JS};
 use super::AppState;
 
-pub async fn get_docs(State(state): State<AppState>) -> Html<String> {
+pub async fn get_docs(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(login) = super::gate_html(&headers, &state) {
+        return login;
+    }
     let markup = render(&state);
-    Html(markup.into_string())
+    Html(markup.into_string()).into_response()
 }
 
 const CSS: &str = r#"
@@ -814,12 +818,6 @@ fn render(state: &AppState) -> Markup {
                             tr { td { code { "S3_LOGS_BUCKET" } }
                                  td { code { (boot.s3_bucket.as_deref().unwrap_or("(unset)")) } }
                                  td { "Required when " code { "COLD_STORE=s3" } } }
-                            tr { td { code { "INGEST_TOKEN" } }
-                                 td { code { (if boot.has_ingest_token { "set" } else { "(unset — unauth)" }) } }
-                                 td { "Bearer on POST /ingest" } }
-                            tr { td { code { "DASHBOARD_TOKEN" } }
-                                 td { code { (if boot.has_dashboard_token { "set" } else { "(unset — unauth)" }) } }
-                                 td { "Bearer on GET /logs + /" } }
                             tr { td { code { "APP_ENV" } }
                                  td { code { (boot.env_name) } }
                                  td { "Display only" } }

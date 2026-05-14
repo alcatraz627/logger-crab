@@ -150,11 +150,21 @@ form.filters {
 .filter-group.grow { flex: 1 1 200px; }
 .filter-group.actions { margin-left: auto; }
 .filter-row {
-  display: flex; align-items: flex-end; gap: 12px 14px;
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 14px;
   flex: 1 1 100%; min-width: 100%;
 }
 .filter-row > .grow { flex: 1 1 auto; }
 .filter-row > .filter-group { min-width: auto; }
+/* Allow shrinking on narrow desktop windows; preserve UA-default
+   width on desktop by NOT setting flex-grow > 0 here. */
+.filter-row > .date-range-group { min-width: 0; }
+@media (max-width: 720px) {
+  .filter-row > .grow { display: none; }
+  .filter-row > .date-range-group { flex: 1 1 160px; }
+  .filter-row > .date-range-group input[type="datetime-local"] {
+    min-width: 0; width: 100%;
+  }
+}
 .filter-group label {
   display: inline-flex; align-items: center; gap: 5px;
   font-size: 10.5px; color: var(--dim); text-transform: uppercase;

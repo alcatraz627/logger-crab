@@ -28,3 +28,4 @@ _*.claude.md
 claude/_*.claude.md
 **/.playwright-mcp/
 .claude/skills/shared/locks/
+wal.jsonl
