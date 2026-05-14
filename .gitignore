@@ -29,3 +29,6 @@ claude/_*.claude.md
 **/.playwright-mcp/
 .claude/skills/shared/locks/
 wal.jsonl
+
+# Local-only inspection artifacts (dump-docs.sh output)
+_docs.md

@@ -1,13 +1,17 @@
 use axum::extract::State;
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, Uri};
 use axum::response::{Html, IntoResponse, Response};
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 
 use super::nav::{render_nav, Active, BRAND_NAME, NAV_CSS, TOGGLE_JS};
 use super::AppState;
 
-pub async fn get_docs(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Err(login) = super::gate_html(&headers, &state) {
+pub async fn get_docs(
+    State(state): State<AppState>,
+    uri: Uri,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(login) = super::gate_html(&headers, &state, &uri) {
         return login;
     }
     let markup = render(&state);
@@ -824,11 +828,149 @@ fn render(state: &AppState) -> Markup {
                         }
                     }
 
-                    h2 { "Client library quickstart" }
-                    h3 { "TypeScript" }
-                    pre { code class="language-typescript" { (TS_EXAMPLE) } }
-                    h3 { "Python" }
-                    pre { code class="language-python" { (PY_EXAMPLE) } }
+                    h2 id="client-quickstart" { "Client library quickstart" }
+                    p {
+                        "There is no published " code { "@versable/*" } " or PyPI package — each "
+                        "consumer codebase carries its own thin sink that POSTs the same wire "
+                        "format. The TypeScript pattern below is the working one in "
+                        code { "enhancement-product/frontend/src/utils/logger/" } "; the Python "
+                        "pattern is a reference for backend / worker / cron integration "
+                        "(stdout-only today)."
+                    }
+
+                    div.callout.callout-tip {
+                        div.callout-icon { "▸" }
+                        div.callout-body {
+                            "Wire format is identical across runtimes. If you keep the envelope "
+                            "shape consistent (" code { "resource" } " + " code { "scope" } " + "
+                            code { "events[]" } "), any HTTP client will work — there's no SDK "
+                            "lock-in."
+                        }
+                    }
+
+                    h3 { "What to register before any code runs" }
+                    p {
+                        "Six env vars per runtime. Token comes from the corresponding "
+                        code { "INGEST_TOKEN_<NAME>" } " on the logger-crab server — copy the part "
+                        b { "after" } " the " code { "full:" } " / " code { "public:" } " prefix."
+                    }
+                    p { b { "Frontend (Next.js, Vercel):" } }
+                    pre { code class="language-bash" { (ENV_TS_QUICKSTART) } }
+                    p { b { "Backend / worker / cron (Render):" } }
+                    pre { code class="language-bash" { (ENV_PY_QUICKSTART) } }
+
+                    h3 { "TypeScript — actually working integration" }
+                    p {
+                        "The frontend uses a pluggable-sink logger with a server-only crab sink. "
+                        "Client events never POST to crab directly — they buffer in the browser, "
+                        "ship to " code { "/api/log" } ", and the server re-emits through its own "
+                        "logger so the same sink picks them up. This keeps the crab token out of "
+                        "the browser bundle entirely."
+                    }
+                    p { b { "1. The sink (abridged):" } }
+                    pre { code class="language-typescript" { (TS_SINK_SHAPE) } }
+                    p { b { "2. The call surface — uniform across the app:" } }
+                    pre { code class="language-typescript" { (TS_CALLSITE) } }
+                    p { b { "3. Client → server bridge (so the browser never holds a token):" } }
+                    pre { code class="language-typescript" { (TS_BROWSER_BRIDGE) } }
+
+                    h3 { "Python — reference pattern (not yet wired in backend)" }
+                    p {
+                        "The backend currently configures loguru to stdout and Render captures the "
+                        "lines. To ship to crab, add a loguru sink that batches + POSTs. Reference "
+                        "shape below mirrors the TypeScript sink so the wire format stays identical "
+                        "and dashboard queries work across runtimes."
+                    }
+                    pre { code class="language-python" { (PY_SINK_SHAPE) } }
+                    p { b { "Call sites stay loguru-native:" } }
+                    pre { code class="language-python" { (PY_CALLSITE) } }
+
+                    h2 id="what-to-send" { "What to send where" }
+                    p {
+                        "Picking field values consistently is what makes the dashboard useful. "
+                        "The table below maps emitter context to what's worth sending."
+                    }
+                    table {
+                        thead {
+                            tr {
+                                th { "Emitter type" }
+                                th { code { "request_id" } "?" }
+                                th { "Typical " code { "service" } }
+                                th { "Event-name examples" }
+                            }
+                        }
+                        tbody {
+                            tr {
+                                td { "Web request handler (Next.js route, FastAPI endpoint)" }
+                                td { b { "Yes — required." } " Mint at edge if missing." }
+                                td { code { "versable-app" } " · " code { "versable-api" } }
+                                td { code { "apiRoute.start" } " · " code { "auth.login.fail" } }
+                            }
+                            tr {
+                                td { "Background worker picking up a queue job" }
+                                td { "Yes " b { "only if" } " the originating request stored it in the job payload" }
+                                td { code { "credit-worker" } " · " code { "backend-worker" } }
+                                td { code { "pipeline.start" } " · " code { "job.retry" } }
+                            }
+                            tr {
+                                td { "Cron job / scheduled task" }
+                                td { b { "No." } " Use a synthetic " code { "tick_id" } " in payload if you need per-run grouping." }
+                                td { code { "notify-cron" } }
+                                td { code { "cron.tick.start" } " · " code { "cron.tick.end" } }
+                            }
+                            tr {
+                                td { "Standalone script / CLI / migration" }
+                                td { "No" }
+                                td { code { "scripts" } " · " code { "migration" } }
+                                td { code { "db.migrate.start" } }
+                            }
+                            tr {
+                                td { "Boot / init / shutdown" }
+                                td { "No" }
+                                td { "whatever the runtime is" }
+                                td { code { "service.boot" } " · " code { "service.shutdown" } }
+                            }
+                        }
+                    }
+
+                    h3 { "Field cheat-sheet (what each does)" }
+                    ul {
+                        li {
+                            code { "event" } " — " b { "required, stable, dotted lowercase." }
+                            " This is the primary group-by. Never rename after shipping; the "
+                            "dashboard's event-prefix filter and any later queries depend on it. "
+                            "Format: " code { "<noun>.<verb>" } " or " code { "<area>.<noun>.<verb>" } "."
+                        }
+                        li {
+                            code { "severity" } " — " code { "info" } " by default. Use "
+                            code { "warn" } " for degraded-but-working, " code { "error" } " for "
+                            "user-visible failure, " code { "fatal" } " for crash."
+                        }
+                        li {
+                            code { "request_id" } " — see the table above. When applicable, also "
+                            "attach it to Sentry scope so exceptions and log traces link "
+                            "bidirectionally."
+                        }
+                        li {
+                            code { "service" } " — stable per emitter. Pick once and never change; "
+                            "the env-pill color and " code { "/health" } " per-service stats depend "
+                            "on a stable value."
+                        }
+                        li {
+                            code { "env" } " — " code { "prod" } " / " code { "staging" } " / "
+                            code { "dev" } ". Drives the env pill color in the dashboard."
+                        }
+                        li {
+                            code { "payload" } " — free-form object. Searchable via FTS. "
+                            "Don't put secrets in here; the frontend logger key-masks "
+                            "(password/token/secret/auth/cookie) before any sink sees the event."
+                        }
+                        li {
+                            code { "user_id" } " / " code { "session_id" } " / "
+                            code { "team_id" } " — optional top-level correlation keys when the "
+                            "request is user-attributable. Indexed for filter queries."
+                        }
+                    }
 
                     h2 id="patterns" { "Common patterns" }
                     h3 { "Threading the request_id" }
@@ -1097,26 +1239,194 @@ import sentry_sdk
 sentry_sdk.set_tag("request_id", rid)
 "#;
 
-const TS_EXAMPLE: &str = r#"import { logger } from "@versable/logger-crab-client";
+// ─── Quickstart env-vars (the registration step) ──────────────────────────
+// What to set on each runtime BEFORE wiring any code. URLs/tokens are
+// runtime-only — never NEXT_PUBLIC_ for crab, since the client never talks
+// to crab directly (client emits go via the server re-emit path).
+const ENV_TS_QUICKSTART: &str = r#"# .env / Vercel — frontend (server runtime)
+LOGGER_CRAB_URL=https://logger-crab.onrender.com
+LOGGER_CRAB_TOKEN=<the bare token AFTER the "full:" prefix>
+LOGGER_CRAB_ENABLED=true
+LOGGER_CRAB_SERVICE_NAME=versable-app   # appears in dashboard's service column
+LOGGER_CRAB_ENV=prod                    # prod | staging | dev — sets env pill
 
-await logger.emit({
+# Optional kill switches
+APP_LOGGER_SERVER=true                  # default true; set false to mute server emits
+NEXT_PUBLIC_APP_LOGGER_CLIENT=true      # opt-in for prod browser emits (dev is on)
+"#;
+
+const ENV_PY_QUICKSTART: &str = r#"# Render env — backend / worker / cron
+LOGGER_CRAB_URL=https://logger-crab.onrender.com
+LOGGER_CRAB_TOKEN=<the bare token AFTER the "full:" prefix>
+LOGGER_CRAB_ENABLED=true
+LOGGER_CRAB_SERVICE_NAME=versable-api   # or credit-worker, notify-cron, scraper-api
+LOGGER_CRAB_ENV=prod
+"#;
+
+// ─── Real TS code — abridged from frontend/src/utils/logger/ ──────────────
+// Pattern: pluggable sinks, server-side crab sink is the only path to /ingest.
+// Client events reach crab via /api/log → server emit → server crab sink.
+const TS_SINK_SHAPE: &str = r#"// frontend/src/utils/logger/sinks/crab-sink-shared.ts (abridged)
+// Server-only. Batches 25 events / 2000 ms, POSTs to /ingest, fails silently.
+
+const buildEnvelope = (cfg, events) => JSON.stringify({
+  resource: { service: cfg.service, env: cfg.env },
+  scope: { name: "logger-crab.ts", version: "1" },
+  events: events.map(toWire),
+});
+
+const send = (events) => {
+  fetch(`${cfg.url}/ingest`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${cfg.token}`,
+      "Content-Type": "application/json",
+    },
+    body: buildEnvelope(cfg, events),
+    keepalive: true, // unload doesn't drop the last batch
+  }).catch(() => undefined); // telemetry must never break the app
+};
+"#;
+
+const TS_CALLSITE: &str = r#"// Anywhere in server code — the call surface is uniform.
+import { logger } from "@/utils/logger";
+
+logger.info("apiRoute.start", { route: routeName });
+
+logger.warn("auth.backend_rejected", { user_id: userId, origin });
+
+logger.error("openai.call.error",
+  { provider: "openai", status: 429 },
+  err,                      // 3rd arg: Error object — auto-flattens to payload
+);
+
+// Canonical full-control emit
+logger.event({
   event: "pipeline.start",
   severity: "info",
-  request_id: req.headers["x-request-id"],
-  service: "versable-api",
-  message: `picked up job ${job.id}`,
-  attrs: { job_id: job.id, attempt: 1 },
+  request_id: rid,          // explicit; otherwise filled from withLoggerContext()
+  payload: { job_id, attempt: 1 },
+  message: "picked up job",
 });
 "#;
 
-const PY_EXAMPLE: &str = r#"from logger_crab import emit
+const TS_BROWSER_BRIDGE: &str = r#"// frontend/src/app/api/log/route.ts — receives client-buffered events,
+// re-emits via the server logger so the crab sink picks them up.
+// Client never talks to crab directly — no token in the browser bundle.
+export async function POST(req: NextRequest) {
+  const { events } = await req.json();
+  for (const e of events) logger.event(e);   // origin: "client" preserved
+  return NextResponse.json({ ok: true });
+}
+"#;
 
-await emit(
-    event="openai.call.error",
-    severity="error",
-    request_id=req_id,
-    service="credit-worker",
-    message="OpenAI 429",
-    attrs={"provider": "openai", "status": 429, "retry_after_s": 30},
-)
+// ─── Python reference sink — pattern only; backend integration pending ────
+// Backend today (2026-05) only configures loguru → stdout. To send to crab,
+// add a loguru sink that batches and POSTs to /ingest. Shape below mirrors
+// the working TS sink so the wire format stays identical.
+const PY_SINK_SHAPE: &str = r#"# backend/lib/logging/crab_sink.py — REFERENCE; not yet wired.
+# Wire into the loguru singleton in lib/logging/__init__.py via logger.add(...).
+# Mirrors the TS sink: batch 25 events / 2 s, fire-and-forget, lossy on error.
+
+import atexit
+import json
+import os
+import threading
+import urllib.request
+from collections import deque
+
+URL     = os.environ["LOGGER_CRAB_URL"]
+TOKEN   = os.environ["LOGGER_CRAB_TOKEN"]
+SERVICE = os.environ.get("LOGGER_CRAB_SERVICE_NAME", "versable-api")
+ENV     = os.environ.get("LOGGER_CRAB_ENV", "dev")
+
+BATCH, FLUSH_S = 25, 2.0
+_buf: deque = deque()
+_lock = threading.Lock()
+_timer: threading.Timer | None = None
+
+def _post(events):
+    if not events:
+        return
+    body = json.dumps({
+        "resource": {"service": SERVICE, "env": ENV},
+        "scope":    {"name": "logger-crab.py", "version": "1"},
+        "events":   events,
+    }).encode()
+    req = urllib.request.Request(
+        f"{URL.rstrip('/')}/ingest", data=body,
+        headers={"Authorization": f"Bearer {TOKEN}",
+                 "Content-Type":  "application/json"},
+    )
+    try:
+        urllib.request.urlopen(req, timeout=5).read()
+    except Exception:
+        pass  # telemetry must never break the app
+
+def _drain_locked():
+    # Caller already holds _lock. Returns events to send (after releasing).
+    batch = list(_buf)
+    _buf.clear()
+    return batch
+
+def _flush():
+    global _timer
+    with _lock:
+        batch = _drain_locked()
+        _timer = None
+    _post(batch)
+
+def crab_handler(message):
+    global _timer
+    rec = message.record
+    extra = rec["extra"] or {}
+    # Callers should bind extra["event"]. The "unbound" fallback makes
+    # missing tags visible in the dashboard instead of silently polluting
+    # the event taxonomy with loguru module paths.
+    event = extra.get("event") or "unbound"
+    wire = {
+        "event":           event,
+        "severity_text":   rec["level"].name.lower(),
+        "severity_number": rec["level"].no,
+        "ts":              rec["time"].isoformat(),
+        "message":         rec["message"],
+        "request_id":      extra.get("request_id"),
+        "user_id":         extra.get("user_id"),
+        "payload":         {k: v for k, v in extra.items()
+                            if k not in ("event", "request_id", "user_id")},
+    }
+    flush_now = None
+    with _lock:
+        _buf.append(wire)
+        if len(_buf) >= BATCH:
+            flush_now = _drain_locked()
+            if _timer:
+                _timer.cancel()
+                _timer = None
+        elif _timer is None:
+            _timer = threading.Timer(FLUSH_S, _flush)
+            _timer.daemon = True
+            _timer.start()
+    if flush_now is not None:
+        _post(flush_now)
+
+atexit.register(_flush)  # drain on process exit so short scripts aren't lossy
+"#;
+
+const PY_CALLSITE: &str = r#"# Anywhere in backend code — PrintLogger or raw loguru both work.
+from lib.logging import PrintLogger
+from loguru import logger
+
+log = PrintLogger(label="claimer")
+log.info("claimed task")                              # → [INFO] [claimer] claimed task
+log.warning("lock contention", label="hot")           # sub-label
+
+# For crab-bound events, bind structured fields via loguru's `extra`:
+logger.bind(event="job.start", request_id=rid, job_id=jid).info("picked up")
+
+# In `except` blocks — loguru attaches the active traceback automatically
+try:
+    do_thing()
+except Exception:
+    log.exception("openai.call.error", label="429")
 "#;

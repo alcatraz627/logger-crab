@@ -19,7 +19,11 @@ use super::nav::BRAND_NAME;
 /// cookie set. `Max-Age=2592000` = 30 days; `HttpOnly` blocks JS access;
 /// `SameSite=Strict` blocks cross-site auto-send. `Secure` is added when
 /// the request reached us over HTTPS.
-pub(crate) fn login_redirect_with_cookie(token: &str, headers: &HeaderMap) -> Response {
+pub(crate) fn login_redirect_with_cookie(
+    token: &str,
+    headers: &HeaderMap,
+    next: Option<&str>,
+) -> Response {
     let secure_flag = if is_https(headers) { "; Secure" } else { "" };
     let cookie = format!(
         "{}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000{}",
@@ -27,7 +31,9 @@ pub(crate) fn login_redirect_with_cookie(token: &str, headers: &HeaderMap) -> Re
         token,
         secure_flag,
     );
-    let mut response = Redirect::to("/").into_response();
+    // `next` was already validated by `safe_next`; treat None as "/".
+    let target = next.unwrap_or("/");
+    let mut response = Redirect::to(target).into_response();
     if let Ok(value) = HeaderValue::from_str(&cookie) {
         response.headers_mut().insert(header::SET_COOKIE, value);
     }
@@ -47,7 +53,10 @@ pub(crate) fn is_https(headers: &HeaderMap) -> bool {
 /// Custom login page — single password input, no username field. Replaces
 /// the browser-native HTTP Basic prompt. Submits via GET to `/?token=...`
 /// which the dashboard handler turns into a cookie + redirect.
-pub(crate) fn render_login_page(token_was_invalid: bool) -> impl IntoResponse {
+pub(crate) fn render_login_page(
+    token_was_invalid: bool,
+    next: Option<&str>,
+) -> impl IntoResponse {
     let markup = html! {
         (DOCTYPE)
         html {
@@ -77,6 +86,9 @@ pub(crate) fn render_login_page(token_was_invalid: bool) -> impl IntoResponse {
                             autocomplete="current-password"
                             autofocus
                             placeholder="paste your DASHBOARD_TOKEN value";
+                        @if let Some(n) = next {
+                            input type="hidden" name="next" value=(n);
+                        }
                         button type="submit" { "Sign in" }
                     }
                     p.login-hint {

@@ -46,6 +46,25 @@ pub struct DashboardQuery {
     /// sets the dashboard cookie, and redirects back to `/` so the URL
     /// no longer carries the secret.
     pub token: Option<String>,
+    /// Post-login redirect target. Set by `gate_html` when an unauth'd
+    /// request hits a gated route (`/docs`, `/api`) — captures the
+    /// originally-requested path so the user lands there after pasting
+    /// the token instead of bouncing to the dashboard root.
+    pub next: Option<String>,
+}
+
+/// Sanitize a `next=` redirect target to prevent open-redirect attacks.
+/// Accepts only same-origin absolute paths: must start with a single `/`,
+/// reject protocol-relative (`//host`) and scheme-bearing (`javascript:`)
+/// values. Length-capped so an attacker can't blow up the form.
+pub(crate) fn safe_next(raw: Option<&str>) -> Option<String> {
+    let s = raw?.trim();
+    if s.is_empty() || s.len() > 512 { return None; }
+    if !s.starts_with('/') { return None; }
+    if s.starts_with("//") { return None; } // protocol-relative
+    if s.contains(':') { return None; }     // javascript:, data:, etc.
+    if s.contains('\\') { return None; }    // backslash tricks
+    Some(s.to_string())
 }
 
 pub async fn get_dashboard(
@@ -55,22 +74,28 @@ pub async fn get_dashboard(
 ) -> Result<Response, AppError> {
     let expected = state.dashboard_token.as_deref().map(|s| s.as_str());
 
-    // Paste-and-go: GET /?token=XXX → set cookie, 302 to / (so the secret
-    // doesn't sit in the address bar or browser history).
+    let next = safe_next(q.next.as_deref());
+
+    // Paste-and-go: GET /?token=XXX → set cookie, 302 to `next` (or / if
+    // none/unsafe) so the secret doesn't sit in the address bar or history.
     if let Some(token) = q.token.as_deref() {
         if let Some(exp) = expected {
             if token == exp {
-                return Ok(super::dashboard_login::login_redirect_with_cookie(token, &headers));
+                return Ok(super::dashboard_login::login_redirect_with_cookie(
+                    token,
+                    &headers,
+                    next.as_deref(),
+                ));
             }
         }
         // Token in query but invalid (or no token configured) → fall through
         // to the login page, which will render with an error notice.
-        return Ok(super::dashboard_login::render_login_page(true).into_response());
+        return Ok(super::dashboard_login::render_login_page(true, next.as_deref()).into_response());
     }
 
     // No ?token= param — check existing auth (cookie or Bearer).
     if !super::auth::check_dashboard_auth(&headers, expected) {
-        return Ok(super::dashboard_login::render_login_page(false).into_response());
+        return Ok(super::dashboard_login::render_login_page(false, next.as_deref()).into_response());
     }
 
     let page_size = q.limit.unwrap_or(100).clamp(10, 500);

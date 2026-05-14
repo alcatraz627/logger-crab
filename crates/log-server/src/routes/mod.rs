@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
@@ -163,23 +163,29 @@ async fn get_wordmark() -> impl IntoResponse {
 
 /// Gate an HTML dashboard route. Returns `Ok(())` if the request carries
 /// valid dashboard auth (cookie or Bearer), or `Err(login_page_response)`
-/// to short-circuit the handler. Use with the `?` operator:
+/// to short-circuit the handler. The original request URI is captured as
+/// the post-login `next` target so the user lands on the page they asked
+/// for instead of bouncing to `/`.
 ///
 /// ```ignore
-/// pub async fn get_thing(State(s): State<AppState>, headers: HeaderMap) -> Response {
-///     if let Err(login) = gate_html(&headers, &s) { return login; }
+/// pub async fn get_thing(uri: Uri, headers: HeaderMap, State(s): State<AppState>) -> Response {
+///     if let Err(login) = gate_html(&headers, &s, &uri) { return login; }
 ///     ...
 /// }
 /// ```
 ///
 /// When `DASHBOARD_TOKEN` is unset (dev mode), this always returns `Ok(())`.
-pub fn gate_html(headers: &HeaderMap, state: &AppState) -> Result<(), Response> {
+pub fn gate_html(headers: &HeaderMap, state: &AppState, uri: &Uri) -> Result<(), Response> {
     let expected = state.dashboard_token.as_deref().map(|s| s.as_str());
     if auth::check_dashboard_auth(headers, expected) {
-        Ok(())
-    } else {
-        Err(dashboard_login::render_login_page(false).into_response())
+        return Ok(());
     }
+    // path_and_query() preserves any query string the user had; safe_next
+    // will reject it if it doesn't pass validation (it won't — gated
+    // routes are simple paths). Capture so /docs?foo=bar round-trips too.
+    let next = uri.path_and_query().map(|pq| pq.as_str().to_string());
+    let next_validated = dashboard::safe_next(next.as_deref());
+    Err(dashboard_login::render_login_page(false, next_validated.as_deref()).into_response())
 }
 
 /// Mask a DATABASE_URL for display: strips userinfo in `scheme://user:pass@host`,

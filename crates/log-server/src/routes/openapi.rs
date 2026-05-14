@@ -1,5 +1,5 @@
 use axum::extract::State;
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Response};
 use maud::{html, PreEscaped, DOCTYPE};
 
@@ -27,9 +27,10 @@ pub async fn get_openapi_yaml(
 
 pub async fn get_swagger_ui(
     State(state): State<AppState>,
+    uri: Uri,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(login) = super::gate_html(&headers, &state) {
+    if let Err(login) = super::gate_html(&headers, &state, &uri) {
         return login;
     }
     let markup = html! {
