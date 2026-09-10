@@ -1,0 +1,34 @@
+# Publishes this repo's docs to the Versable tech nexus.
+#
+# The build and the theme live in the automation repo, so this file only says
+# which repo is publishing and when. The result appears at
+# https://tech.versable.ai/enhancement-product/docs/ behind the company login,
+# usually within a couple of minutes of the merge.
+name: docs-nexus
+
+on:
+  push:
+    branches: [development]
+    paths:
+      - 'frontend/docs/**'
+      - 'mkdocs.yml'
+      - '.github/workflows/docs-nexus.yml'
+  workflow_dispatch: {}
+
+jobs:
+  docs:
+    uses: versable-git/slack-automation/.github/workflows/docs-publish.yml@main
+    # The publish step commits the built site to this repo's gh-pages branch, so
+    # it needs write. A called workflow can never ask for more than its caller
+    # was granted, and this repo hands workflows read by default: without these
+    # two lines GitHub rejects the run before it starts, with no job and no log
+    # to explain why.
+    permissions:
+      contents: write
+    # Carries DOCS_KIT_TOKEN, the org secret that reads the shared theme out of
+    # the private automation repo. This repo's own token cannot: it is scoped to
+    # this repo, so the theme checkout fails as "Repository not found" without
+    # it, which looks like a typo rather than a permission denial.
+    secrets: inherit
+    with:
+      docs_dir: frontend/docs
