@@ -2,17 +2,16 @@
 #
 # The build and the theme live in the automation repo, so this file only says
 # which repo is publishing and when. The result appears at
-# https://tech.versable.ai/enhancement-product/docs/ behind the company login,
+# https://tech.versable.ai/logger-crab/docs/ behind the company login,
 # usually within a couple of minutes of the merge.
 name: docs-nexus
 
 on:
   push:
-    branches: [development]
+    branches: [main]
     paths:
-      - 'frontend/docs/**'
+      - 'docs/**'
       - 'mkdocs.yml'
-      - '.github/workflows/docs-nexus.yml'
   workflow_dispatch: {}
 
 jobs:
@@ -31,4 +30,4 @@ jobs:
     # it, which looks like a typo rather than a permission denial.
     secrets: inherit
     with:
-      docs_dir: frontend/docs
+      docs_dir: docs
