@@ -1,18 +1,8 @@
-```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                                                                              ║
-║      ██╗      ██████╗  ██████╗  ██████╗ ███████╗██████╗     ██████╗         ║
-║      ██║     ██╔═══██╗██╔════╝ ██╔════╝ ██╔════╝██╔══██╗   ██╔════╝         ║
-║      ██║     ██║   ██║██║  ███╗██║  ███╗█████╗  ██████╔╝   ██║              ║
-║      ██║     ██║   ██║██║   ██║██║   ██║██╔══╝  ██╔══██╗   ██║              ║
-║      ███████╗╚██████╔╝╚██████╔╝╚██████╔╝███████╗██║  ██║   ╚██████╗ rab     ║
-║      ╚══════╝ ╚═════╝  ╚═════╝  ╚═════╝ ╚══════╝╚═╝  ╚═╝    ╚═════╝         ║
-║                                                                              ║
-║                Centralized logging for the Versable stack                    ║
-║              rust · axum · sqlx · sqlite · s3 · maud · htmx                  ║
-║                                                                              ║
-╚══════════════════════════════════════════════════════════════════════════════╝
-```
+<p align="center">
+  <img src=".github/readme/banner.svg" alt="logger-crab banner: Crabs out of the trash" width="100%">
+</p>
+
+# <img src=".github/readme/favicon.svg" alt="" width="32" height="32"> logger-crab
 
 > One log service to bind them all. Crude V1, deliberately disposable.
 
@@ -29,6 +19,13 @@ with no request_id passing) and **out of the way of your wallet** (Render
 Starter $7/mo, SQLite on disk, no managed DB).
 
 ---
+
+<details>
+<summary>Riddle answer</summary>
+
+The request_id: set once at each runtime edge and threaded through X-Request-ID headers, Redis payloads and Sentry scope, so one query returns a user action across every service.
+
+</details>
 
 ## Architecture
 
