@@ -267,7 +267,7 @@ mod tests {
     #[test]
     fn render_login_page_contains_login_form() {
         use axum::body::to_bytes;
-        let resp = render_login_page(false).into_response();
+        let resp = render_login_page(false, None).into_response();
         let bytes = futures::executor::block_on(to_bytes(resp.into_body(), 65536)).unwrap();
         let body = std::str::from_utf8(&bytes).unwrap();
         assert!(body.contains("Versable logger-crab"));
@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn render_login_page_with_invalid_token_shows_error() {
         use axum::body::to_bytes;
-        let resp = render_login_page(true).into_response();
+        let resp = render_login_page(true, None).into_response();
         let bytes = futures::executor::block_on(to_bytes(resp.into_body(), 65536)).unwrap();
         let body = std::str::from_utf8(&bytes).unwrap();
         assert!(body.contains("Invalid token"));
@@ -289,7 +289,7 @@ mod tests {
 
     #[test]
     fn login_redirect_sets_cookie_and_location() {
-        let resp = login_redirect_with_cookie("test-tok", &HeaderMap::new());
+        let resp = login_redirect_with_cookie("test-tok", &HeaderMap::new(), None);
         let cookie = resp.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap();
         assert!(cookie.contains("test-tok"));
         assert!(cookie.contains("HttpOnly"));
@@ -305,7 +305,7 @@ mod tests {
     fn login_redirect_adds_secure_when_https() {
         let mut h = HeaderMap::new();
         h.insert("x-forwarded-proto", HeaderValue::from_static("https"));
-        let resp = login_redirect_with_cookie("test-tok", &h);
+        let resp = login_redirect_with_cookie("test-tok", &h, None);
         let cookie = resp.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap();
         assert!(cookie.contains("Secure"));
     }

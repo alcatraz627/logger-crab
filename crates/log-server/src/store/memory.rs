@@ -141,6 +141,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn filters_on_payload_work_ids() {
+        let store = MemoryHotStore::new();
+        let mut a = ev("a", 0, None, None);
+        a.payload = json!({"job_id": "j1", "team_id": "team-a"});
+        let mut b = ev("b", 1, None, None);
+        b.payload = json!({"job_id": 2, "team_id": "team-a"});
+        store.ingest(&[a, b, ev("c", 2, None, None)]).await.unwrap();
+
+        let by_job = QueryParams { job_id: Some("2".into()), limit: 50, ..Default::default() };
+        let page = store.query(&by_job).await.unwrap();
+        assert_eq!(page.events.len(), 1);
+        assert_eq!(page.events[0].request_id, "b");
+        let by_team = QueryParams { team_id: Some("team-a".into()), limit: 50, ..Default::default() };
+        assert_eq!(store.query(&by_team).await.unwrap().events.len(), 2);
+    }
+
+    #[tokio::test]
     async fn cursor_pagination_walks_pages_in_order() {
         let store = MemoryHotStore::new();
         // 5 events, newest to oldest: e0 (now), e1 (-10s), e2 (-20s), e3 (-30s), e4 (-40s)
@@ -351,6 +368,11 @@ fn match_event(e: &LogEvent, p: &QueryParams) -> bool {
     }
     if let Some(min) = p.min_severity {
         if e.severity_number < min {
+            return false;
+        }
+    }
+    for (key, want) in p.payload_filters() {
+        if !crate::models::payload_field_eq(&e.payload, key, want) {
             return false;
         }
     }
