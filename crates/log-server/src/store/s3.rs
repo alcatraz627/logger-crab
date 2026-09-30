@@ -703,6 +703,9 @@ pub(crate) fn match_event_filters(e: &LogEvent, p: &QueryParams) -> bool {
     if let Some(min) = p.min_severity {
         if e.severity_number < min { return false; }
     }
+    for (key, want) in p.payload_filters() {
+        if !crate::models::payload_field_eq(&e.payload, key, want) { return false; }
+    }
     if let Some(fts) = &p.fts {
         let needle = fts.to_ascii_lowercase();
         let haystack = format!(

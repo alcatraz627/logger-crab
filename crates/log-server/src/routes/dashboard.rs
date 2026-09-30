@@ -110,6 +110,9 @@ pub async fn get_dashboard(
         since: parse_dashboard_dt(q.since.as_deref()),
         until: parse_dashboard_dt(q.until.as_deref()),
         fts: not_empty(&q.q),
+        job_id: None,
+        task_id: None,
+        team_id: None,
         limit: page_size,
         cursor: not_empty(&q.cursor),
     };
@@ -190,7 +193,8 @@ pub async fn get_dashboard(
         || params.env.is_some()
         || params.event_prefix.is_some()
         || params.min_severity.is_some()
-        || params.fts.is_some();
+        || params.fts.is_some()
+        || !params.payload_filters().is_empty();
     let filtered_count = if filter_active_for_count {
         state.hot.count(&params).await.ok()
     } else {

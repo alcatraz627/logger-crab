@@ -47,8 +47,35 @@ pub struct QueryParams {
     pub since: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
     pub fts: Option<String>,
+    // Work ids live in `payload`, not as columns (backend ADR-008 identity-vs-work split).
+    pub job_id: Option<String>,
+    pub task_id: Option<String>,
+    pub team_id: Option<String>,
     pub limit: u32,
     pub cursor: Option<String>,
+}
+
+impl QueryParams {
+    /// The payload-keyed filters that are set, as (payload key, wanted value).
+    pub fn payload_filters(&self) -> Vec<(&'static str, &str)> {
+        [
+            ("job_id", &self.job_id),
+            ("task_id", &self.task_id),
+            ("team_id", &self.team_id),
+        ]
+        .into_iter()
+        .filter_map(|(key, value)| value.as_deref().map(|v| (key, v)))
+        .collect()
+    }
+}
+
+/// True when `payload[key]` equals `want`, comparing numbers by their text form.
+pub fn payload_field_eq(payload: &Value, key: &str, want: &str) -> bool {
+    match payload.get(key) {
+        Some(Value::String(s)) => s == want,
+        Some(Value::Number(n)) => n.to_string() == want,
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

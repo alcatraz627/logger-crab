@@ -256,6 +256,11 @@ fn apply_where<'a>(qb: &mut QueryBuilder<'a, Sqlite>, params: &'a QueryParams) {
     if let Some(until) = params.until {
         qb.push(" AND ts <= ").push_bind(until.to_rfc3339());
     }
+    for (key, value) in params.payload_filters() {
+        // `key` is one of a fixed set of literals, never caller input.
+        qb.push(format!(" AND CAST(json_extract(payload, '$.{key}') AS TEXT) = "))
+            .push_bind(value.to_string());
+    }
     if let Some(q) = &params.fts {
         let trimmed = q.trim();
         if !trimmed.is_empty() {
@@ -294,4 +299,58 @@ fn row_to_event(row: &sqlx::sqlite::SqliteRow) -> Result<LogEvent, StorageError>
 
 fn sqlx_err(e: sqlx::Error) -> StorageError {
     StorageError::Sqlx(e)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{json, Value};
+
+    fn ev(rid: &str, payload: Value) -> LogEvent {
+        LogEvent {
+            request_id: rid.into(),
+            event: "test".into(),
+            severity_number: 9,
+            severity_text: "info".into(),
+            ts: Utc::now(),
+            message: None,
+            service: None,
+            env: None,
+            user_id: None,
+            session_id: None,
+            client_id: None,
+            payload,
+        }
+    }
+
+    #[tokio::test]
+    async fn filters_on_payload_work_ids() {
+        let file = std::env::temp_dir().join(format!("crab-test-{}.db", std::process::id()));
+        let store = SqliteHotStore::connect(&format!("sqlite://{}", file.display()))
+            .await
+            .unwrap();
+        store
+            .ingest(&[
+                ev("a", json!({"job_id": "j1", "task_id": "t1", "team_id": "team-a"})),
+                ev("b", json!({"job_id": "j2", "task_id": 7, "team_id": "team-a"})),
+                ev("c", json!({})),
+            ])
+            .await
+            .unwrap();
+
+        let ids = |page: QueryPage| {
+            let mut ids: Vec<String> = page.events.into_iter().map(|e| e.request_id).collect();
+            ids.sort();
+            ids
+        };
+        let by_job = QueryParams { job_id: Some("j1".into()), limit: 50, ..Default::default() };
+        assert_eq!(ids(store.query(&by_job).await.unwrap()), ["a"]);
+        let by_team = QueryParams { team_id: Some("team-a".into()), limit: 50, ..Default::default() };
+        assert_eq!(ids(store.query(&by_team).await.unwrap()), ["a", "b"]);
+        assert_eq!(store.count(&by_team).await.unwrap(), 2);
+        let numeric_task = QueryParams { task_id: Some("7".into()), limit: 50, ..Default::default() };
+        assert_eq!(ids(store.query(&numeric_task).await.unwrap()), ["b"]);
+
+        let _ = std::fs::remove_file(&file);
+    }
 }

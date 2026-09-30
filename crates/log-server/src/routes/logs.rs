@@ -21,6 +21,9 @@ pub struct LogsQuery {
     pub since: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
     pub q: Option<String>,
+    pub job_id: Option<String>,
+    pub task_id: Option<String>,
+    pub team_id: Option<String>,
     pub limit: Option<u32>,
     pub cursor: Option<String>,
 }
@@ -107,6 +110,9 @@ fn build_query_params(q: LogsQuery) -> QueryParams {
         since: q.since,
         until: q.until,
         fts: q.q,
+        job_id: q.job_id,
+        task_id: q.task_id,
+        team_id: q.team_id,
         limit: q.limit.unwrap_or(200),
         cursor: q.cursor,
     }
