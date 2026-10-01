@@ -1,0 +1,34 @@
+# Mirrors main from alcatraz627/logger-crab to versable-git/logger-crab, which
+# Render deploys from. The push is fast-forward only, so it fails loudly if
+# versable main has commits this repo lacks; pull those in here and re-run.
+#
+# Needs the VERSABLE_SYNC_TOKEN secret: a token with contents:write on
+# versable-git/logger-crab.
+
+name: sync-to-versable
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: sync-to-versable
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    # The file is mirrored into the versable repo too; only run at the source.
+    if: github.repository == 'alcatraz627/logger-crab'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Push main to versable-git/logger-crab
+        env:
+          SYNC_TOKEN: ${{ secrets.VERSABLE_SYNC_TOKEN }}
+        run: git push "https://x-access-token:${SYNC_TOKEN}@github.com/versable-git/logger-crab.git" HEAD:refs/heads/main
