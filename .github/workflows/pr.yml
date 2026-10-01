@@ -1,0 +1,22 @@
+# logger-crab joins pr-claude: Claude writes each PR's description and reviews it.
+# The whole join is this file; secrets come from the org.
+#
+# Every line of the permissions block and the secrets line is load-bearing,
+# and each omission fails in a way that does not look like what it is. The
+# header of the called workflow documents how.
+
+name: pr
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+jobs:
+  claude:
+    uses: versable-git/slack-automation/.github/workflows/pr-claude.yml@main
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    secrets: inherit
