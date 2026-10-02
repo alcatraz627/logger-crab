@@ -31,4 +31,9 @@ jobs:
       - name: Push main to versable-git/logger-crab
         env:
           SYNC_TOKEN: ${{ secrets.VERSABLE_SYNC_TOKEN }}
-        run: git push "https://x-access-token:${SYNC_TOKEN}@github.com/versable-git/logger-crab.git" HEAD:refs/heads/main
+        # Token goes in a header, trimmed, so a pasted trailing newline can't break the URL.
+        run: |
+          token="$(printf '%s' "$SYNC_TOKEN" | tr -d '[:space:]')"
+          basic="$(printf 'x-access-token:%s' "$token" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic ${basic}" \
+            push https://github.com/versable-git/logger-crab.git HEAD:refs/heads/main
