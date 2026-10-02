@@ -119,70 +119,14 @@ pub async fn get_dashboard(
     let health = state.hot.health().await.ok();
     let cold_health = state.cold.health().await.ok();
 
-    // Cold-tier auto-routing: if the user picked a `since` older than
-    // hot's oldest event, the data they want is in the cold tier. We query
-    // cold instead of hot. Only triggers when a real S3 backend is configured
-    // (cold_health.backend == "s3") to avoid wasted no-op calls.
-    let cold_oldest_ok = cold_health
+    let cold_ok = cold_health
         .as_ref()
         .map(|c| c.backend == "s3" && c.ok)
         .unwrap_or(false);
     let hot_oldest = health.as_ref().and_then(|h| h.oldest_ts);
-    let queried_cold = match (params.since, hot_oldest, cold_oldest_ok) {
-        (Some(since), Some(oldest), true) if since < oldest => true,
-        (Some(_), None, true) => true, // hot empty, cold has S3 backend
-        _ => false,
-    };
-
-    // Three modes:
-    //   1. Straddle: `since` is older than hot.oldest_ts AND `until` is newer
-    //      (or absent). Run two queries — cold for [since, hot.oldest), hot
-    //      for [hot.oldest, until] — and concatenate. Naturally dedup-free
-    //      because the boundary is a point in time and rotation only writes
-    //      to cold then deletes from hot (no overlap by design).
-    //   2. Cold-only: `since` is older AND `until` < hot.oldest_ts (or hot
-    //      is genuinely empty). Cold tier is the right answer.
-    //   3. Hot-only: default, what we always did.
-    let queried_straddle = match (params.since, params.until, hot_oldest, cold_oldest_ok) {
-        (Some(since), until, Some(oldest), true) => {
-            since < oldest && until.map(|u| u >= oldest).unwrap_or(true)
-        }
-        _ => false,
-    };
-
-    let (page, queried_cold) = if queried_straddle {
-        let oldest = hot_oldest.expect("guarded by queried_straddle match");
-
-        let mut cold_params = params.clone();
-        cold_params.until = Some(oldest);
-        cold_params.cursor = None; // straddle ignores cursor for V1
-        let cold_page = state.cold.read_range(&cold_params).await?;
-
-        let mut hot_params = params.clone();
-        hot_params.since = Some(oldest);
-        let hot_page = state.hot.query(&hot_params).await?;
-
-        let mut merged = hot_page.events;
-        merged.extend(cold_page.events);
-        merged.sort_by_key(|e| std::cmp::Reverse(e.ts));
-        merged.truncate(params.limit as usize);
-
-        // Surface BOTH next-cursors? Straddle pagination is V2; for now we
-        // return the hot tier's cursor (newer half) since most users will
-        // walk back from there.
-        (
-            crate::models::QueryPage {
-                events: merged,
-                next_cursor: hot_page.next_cursor,
-            },
-            true,
-        )
-    } else if queried_cold {
-        let cold_page = state.cold.read_range(&params).await?;
-        (cold_page, true)
-    } else {
-        (state.hot.query(&params).await?, false)
-    };
+    let (page, queried_cold) =
+        super::logs::query_tiered(state.hot.as_ref(), state.cold.as_ref(), &params, hot_oldest, cold_ok)
+            .await?;
 
     // Real filtered count (only when filters are active — without filters
     // it would equal hot.rows, which we already have).

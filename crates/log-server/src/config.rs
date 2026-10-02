@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::routes::auth::{AuthRole, TokenRecord};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     pub port: u16,
     pub database_url: String,
@@ -25,6 +25,28 @@ pub struct Config {
     /// Non-fatal config warnings — surfaced at boot after tracing init.
     /// Includes malformed `INGEST_TOKEN_*` values and deprecated legacy vars.
     pub warnings: Vec<String>,
+}
+
+// Written by hand so the boot log never prints the dashboard token.
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("port", &self.port)
+            .field("database_url", &self.database_url)
+            .field("hot_store", &self.hot_store)
+            .field("cold_store", &self.cold_store)
+            .field("ingest_tokens", &self.ingest_tokens)
+            .field("dashboard_token", &self.dashboard_token.as_ref().map(|_| "***"))
+            .field("s3_bucket", &self.s3_bucket)
+            .field("aws_region", &self.aws_region)
+            .field("cors_origins", &self.cors_origins)
+            .field("rotation_enabled", &self.rotation_enabled)
+            .field("rotation_interval_secs", &self.rotation_interval_secs)
+            .field("hot_retention_hours", &self.hot_retention_hours)
+            .field("rotation_batch_size", &self.rotation_batch_size)
+            .field("warnings", &self.warnings)
+            .finish()
+    }
 }
 
 impl Config {
@@ -165,6 +187,29 @@ mod tests {
 
     fn vars(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn debug_output_masks_the_dashboard_token() {
+        let cfg = Config {
+            port: 1,
+            database_url: String::new(),
+            hot_store: String::new(),
+            cold_store: String::new(),
+            ingest_tokens: Vec::new(),
+            dashboard_token: Some("super-secret-dashboard".into()),
+            s3_bucket: None,
+            aws_region: String::new(),
+            cors_origins: Vec::new(),
+            rotation_enabled: false,
+            rotation_interval_secs: 0,
+            hot_retention_hours: 0,
+            rotation_batch_size: 0,
+            warnings: Vec::new(),
+        };
+        let printed = format!("{cfg:?}");
+        assert!(!printed.contains("super-secret-dashboard"));
+        assert!(printed.contains("dashboard_token: Some(\"***\")"));
     }
 
     #[test]
